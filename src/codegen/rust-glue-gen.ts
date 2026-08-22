@@ -368,6 +368,9 @@ function emitDirectFn(m: Model, ev: EventDef): string {
   const table = m.tables.find((t) => t.name === ev.tableName)!;
   const id = eventId(ev.name);
   const snake = toSnake(ev.name);
+  // Dotted event names ("chat.send") must not leak into the Rust fn
+  // identifier — keep the C-ABI symbol exact via #[export_name] instead.
+  const fnId = snake.replace(/[^a-zA-Z0-9_]/g, "_");
   const decls = table.fields.map(directArgDecl).join("\n    ");
   const decodes = table.fields
     .map(directDecodeLines)
@@ -379,8 +382,8 @@ function emitDirectFn(m: Model, ev: EventDef): string {
     .join("\n            ");
   const assigns = table.fields.map(directArgAssign).join("\n                ");
   return [
-    `#[no_mangle]`,
-    `pub unsafe extern "C" fn fb_${snake}_serialize(`,
+    `#[export_name = "fb_${snake}_serialize"]`,
+    `pub unsafe extern "C" fn fb_${fnId}_serialize(`,
     `    ${decls}`,
     `    out: *mut u8,`,
     `    out_cap: usize,`,

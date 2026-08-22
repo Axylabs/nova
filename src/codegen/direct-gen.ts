@@ -71,7 +71,9 @@ export function emitDirectSer(m: Model, ctx: EmitContext = {}): string {
   for (const ev of directEvents) {
     const fields = fieldsOf(m, ev);
     const args = fields.flatMap(directArgTypes).concat("ptr", "usize");
-    lines.push(`  ${directSymbol(ev)}: {`);
+    // Quote the key — dotted event names ("chat.send") would otherwise emit
+    // an invalid identifier (`fb_chat.send_serialize:`).
+    lines.push(`  ${JSON.stringify(directSymbol(ev))}: {`);
     lines.push(`    args: [${args.map((a) => JSON.stringify(a)).join(", ")}],`);
     lines.push('    returns: "u64_fast",');
     lines.push("  },");

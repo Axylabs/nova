@@ -88,6 +88,24 @@ describe("generateBindings (any schema)", () => {
     expect(files["registry.ts"]).not.toContain('from "../schema"');
   });
 
+  test("dotted event names produce valid identifiers (regression)", () => {
+    const Dotted = Type.Object({ a: Type.String() }, { additionalProperties: false });
+    const dotted = generateBindings(
+      { schemas: { Dotted }, events: { "chat.send": Dotted } },
+      { outDir: join(genDir, "dotted") },
+    );
+    dotted.write();
+    const files = dotted.files;
+    // direct-ser.ts keys must be quoted (a bare `fb_chat.send_serialize:` is
+    // invalid TS for dotted event names).
+    expect(files["direct-ser.ts"]).toContain('"fb_chat.send_serialize"');
+    // rust glue: valid fn identifier + exact C symbol via #[export_name].
+    expect(files["rust/src/transcode/generated.rs"]).toContain(
+      '#[export_name = "fb_chat.send_serialize"]',
+    );
+    expect(files["rust/src/transcode/generated.rs"]).toContain("fn fb_chat_send_serialize(");
+  });
+
   test("wire registry uses stable FNV-1a ids + a deterministic fingerprint", () => {
     const reg = generated!.wireRegistry;
     expect(reg.events["chat"]).toBe(eventId("chat"));
