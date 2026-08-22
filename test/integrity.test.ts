@@ -138,7 +138,7 @@ describe("data integrity — JSON fallback path (order, deep nesting)", () => {
   });
 
   test("optional nested table absent decodes to undefined", () => {
-    const noBilling: Events["order"] = { ...order, billing: undefined };
+    const { billing: _omitBilling, ...noBilling } = order;
     const out = roundTrip("order", noBilling);
     expect(out.billing).toBeUndefined();
   });
@@ -172,7 +172,6 @@ describe("optional-string edge cases (direct path)", () => {
       totalValue: 1,
       cash: 2,
       ts: 3,
-      updatedBy: undefined,
     };
     expect(roundTrip("portfolio", p).updatedBy).toBeUndefined();
   });

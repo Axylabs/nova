@@ -47,7 +47,7 @@ describe("encode → decode round-trip", () => {
   });
 
   test("missing optional fields decode to undefined, not garbage", () => {
-    const noUpdatedBy: Events["portfolio"] = { ...portfolioPayload, updatedBy: undefined };
+    const { updatedBy: _omit, ...noUpdatedBy } = portfolioPayload;
     const decoded = decodeFrame(encodeEvent("portfolio", noUpdatedBy));
     expect((decoded!.payload as Events["portfolio"]).updatedBy).toBeUndefined();
   });
