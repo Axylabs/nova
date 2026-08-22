@@ -10,9 +10,9 @@ mirrors how the `@ignex/*` packages in the Ignex monorepo are shipped.
 | Field | Value | Why |
 | --- | --- | --- |
 | `main` / `module` / `types` | `./index.ts` | source entrypoint (Bun-native) |
-| `exports` | `.` → `index.ts`, `./server` → `public/server.ts`, `./client` → `public/client.ts`, `./nats` → `public/nats.ts`, `./package.json` | typed subpath API |
+| `exports` | `@ignex/nova` → `index.ts`; `@ignex/nova/server` → `public/server.ts`; `@ignex/nova/client` → `public/client.ts`; `@ignex/nova/nats` → `public/nats.ts`; `@ignex/nova/events` → `public/events.ts`; `@ignex/nova/bindings` → `public/bindings.ts`; `@ignex/nova/generate` → `public/generate.ts`; `@ignex/nova/internal` → `public/internal.ts`; `@ignex/nova/package.json` → `package.json` | typed subpath API |
 | `files` | `index.ts`, `public`, `src`, `rust`, `prebuilds`, `docs`, `README.md`, `LICENSE` | everything consumers need, nothing they don't |
-| `publishConfig` | `{ "access": "public" }` | unscoped package must be public |
+| `publishConfig` | `{ "access": "public" }` | scoped packages are restricted by default — `access: public` publishes `@ignex/nova` publicly |
 | `engines` | `{ "bun": ">=1.4" }` | Bun-only runtime |
 | `sideEffects` | `false` | safe to tree-shake / mark in bundlers |
 

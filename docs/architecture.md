@@ -8,7 +8,7 @@ a Rust FFI serializer — hidden behind a typed pub/sub API.
 The wire stack is generated from TypeBox schemas. The built-in registry
 (`src/schema/index.ts`) runs the in-repo orchestrator (`scripts/generate.ts`);
 **any** app can run the same emitters on its own schema via
-`generateBindings` (`ignex-nova/generate` → `src/codegen/`).
+`generateBindings` (`@ignex/nova/generate` → `src/codegen/`).
 
 ```
 src/schema/index.ts (TypeBox — single source of truth: app events + control events)
@@ -34,8 +34,8 @@ accept via `options.bindings` (default: the built-in `defaultBindings`). See
 
 The public API is built by **functional composition over an explicit state
 object** — no classes, no `this`. `public/server.ts` and `public/client.ts`
-are thin re-export shims that keep the npm entrypoints (`ignex-nova/server`,
-`ignex-nova/client`) and the `dist` build stable; the implementation lives in
+are thin re-export shims that keep the npm entrypoints (`@ignex/nova/server`,
+`@ignex/nova/client`) and the `dist` build stable; the implementation lives in
 `src/core/`.
 
 - **Composition roots** (`src/core/server.ts`, `src/core/client.ts`) — the only
@@ -80,7 +80,7 @@ frames) are encoded by `generated/ts-ser.ts` — flatc's object API (`XxxT` +
 ## Runtime layout
 
 - `public/server.ts`, `public/client.ts`, `public/nats.ts` — thin re-export shims
-  (npm entrypoints `ignex-nova/server` / `client` / `nats` + the `dist` build).
+  (npm entrypoints `@ignex/nova/server` / `client` / `nats` + the `dist` build).
   Implementation is in `src/core/` + `src/bridge/`.
 - `src/core/server.ts` — `createServer` composition root: `Bun.serve`, client
   registry (id → socket), rooms, groups, inbound routing, control frames,
@@ -105,7 +105,7 @@ frames) are encoded by `generated/ts-ser.ts` — flatc's object API (`XxxT` +
 - `src/core/metrics.ts`, `src/core/int64-guard.ts` — `createMetrics()` factory
   + the exact-int64 safety net.
 - `src/events/*` — the events layer (opt-in via `createServer({ events })`,
-  public entry `ignex-nova/events` → `public/events.ts`): `hub.ts` composition
+  public entry `@ignex/nova/events` → `public/events.ts`): `hub.ts` composition
   root (`server.events`, binds the module-global `emit`/`on` singleton),
   `types.ts` (`EventClient` records with `userId` + per-connection `data`,
   `EmitTarget` discriminated union, hub/options interfaces), `registry.ts`

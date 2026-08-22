@@ -1,7 +1,7 @@
 /**
- * Public NATS bridge API — standalone entrypoint (`ignex-nova/nats`).
+ * Public NATS bridge API — standalone entrypoint (`@ignex/nova/nats`).
  *
- *   import { createNatsBridge } from "ignex-nova/nats";
+ *   import { createNatsBridge } from "@ignex/nova/nats";
  *   const bridge = createNatsBridge({ servers: ["nats://localhost:4222"] });
  *   bridge.publish("ignex.broadcast.quote", frame);   // frame = wire bytes
  *

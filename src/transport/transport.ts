@@ -1,7 +1,8 @@
 /**
  * Internal transport: JS object → wire frame via Rust FFI (or the pure-JS
  * encoder for user schemas without a native addon).
- * frame = `[1-byte event_id][size-prefixed FlatBuffer]` — fully produced by Rust.
+ * frame = `[WIRE_VERSION:1][event_id:u32 LE][size-prefixed FlatBuffer]` — fully
+ * produced by Rust (envelope header is WIRE_HEADER_LEN = 5 bytes).
  *
  * Three paths:
  *   - DIRECT (flat events, generated): fields pushed straight into Rust as FFI

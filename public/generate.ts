@@ -7,7 +7,7 @@
  * Usage in your project:
  *
  *   // scripts/generate-bindings.ts
- *   import { generateBindings } from "ignex-nova/generate";
+ *   import { generateBindings } from "@ignex/nova/generate";
  *   import { schemas, events, controlEvents } from "../src/schema"; // YOUR TypeBox
  *   generateBindings({ schemas, events, controlEvents }, { outDir: "./ignex/generated" }).write();
  *
@@ -17,7 +17,7 @@
  *   export const bindings = makeBindings(schema);
  *
  *   // app/server.ts
- *   import { createServer } from "ignex-nova/server";
+ *   import { createServer } from "@ignex/nova/server";
  *   import { bindings } from "./bindings";
  *   const server = createServer({ port: 3000, bindings, nats: { servers: [...], inbound: true } });
  *   server.publish("yourEvent", {...});                 // typed against YOUR Events
@@ -77,7 +77,7 @@ export interface GenerateOptions {
   rust?: boolean;
   /**
    * Import specifier for the ignex library in generated code (internal helpers
-   * + `assembleBindings`), default "ignex-nova". The package root exports all
+   * + `assembleBindings`), default "@ignex/nova". The package root exports all
    * of them.
    */
   libraryImport?: string;
@@ -164,7 +164,7 @@ export function generateBindings(
   options: GenerateOptions = {},
 ): GeneratedBindings {
   const wireVersion = options.wireVersion ?? WIRE_VERSION;
-  const libraryImport = options.libraryImport ?? "ignex-nova";
+  const libraryImport = options.libraryImport ?? "@ignex/nova";
 
   // The standard transport control protocol is always present; users may add
   // custom control events but never override the standard ones.
@@ -401,15 +401,15 @@ function emitReadme(): string {
     "```",
     "",
     "```ts",
-    'import { createServer } from "ignex-nova/server";',
-    'import { createClient } from "ignex-nova/client";',
-    'import { createNatsBridge } from "ignex-nova/nats";',
+    'import { createServer } from "@ignex/nova/server";',
+    'import { createClient } from "@ignex/nova/client";',
+    'import { createNatsBridge } from "@ignex/nova/nats";',
     'import { bindings } from "./bindings";',
     "",
     'const server = createServer({ port: 3000, bindings, nats: { servers: ["nats://localhost:4222"], inbound: true } });',
     'const client = createClient("ws://localhost:3000/ws", { bindings });',
     "",
-    "See docs/generic-bindings.md in the ignex-nova package for the full guide",
+    "See docs/generic-bindings.md in the @ignex/nova package for the full guide",
     "(including the Rust FFI fast path and NATS horizontal scaling).",
     "",
   ].join("\n");

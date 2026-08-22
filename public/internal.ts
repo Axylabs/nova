@@ -1,7 +1,7 @@
 /**
- * Public internal-helper entrypoint — `ignex-nova/internal`.
+ * Public internal-helper entrypoint — `@ignex/nova/internal`.
  *
- * Generated code (from `ignex-nova/generate`) imports these runtime helpers so
+ * Generated code (from `@ignex/nova/generate`) imports these runtime helpers so
  * user projects don't reach into the package's private modules:
  *
  *   - `encodeUtf8Into` / `ensureCapacity` / `utf8Len` — zero-alloc UTF-8

@@ -2,8 +2,8 @@
  * Public events API — the application-facing event-driven layer on top of the
  * FlatBuffer transport core.
  *
- *   import { createServer } from "ignex-nova/server";
- *   import { on, emit, emitToUser, emitToGroup } from "ignex-nova/events";
+ *   import { createServer } from "@ignex/nova/server";
+ *   import { on, emit, emitToUser, emitToGroup } from "@ignex/nova/events";
  *
  *   const server = createServer({ port: 3000, events: {} });
  *

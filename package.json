@@ -69,6 +69,7 @@
     "typecheck": "bunx tsc --noEmit -p tsconfig.json",
     "verify": "bun run typecheck && bun run lint && bun test",
     "pack:check": "bun scripts/check-pack.ts",
+    "gen:ai-map": "bun scripts/gen-ai-map.ts",
     "serve": "bun run src/server.ts",
     "bench:serialize": "bun run bench/serialize.ts",
     "bench:throughput": "bun run bench/throughput.ts",

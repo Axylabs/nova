@@ -1,6 +1,6 @@
 # Events layer — typed event-driven system on the FlatBuffer core
 
-The events layer (`ignex-nova/events`, opt-in via `createServer({ events })`) is
+The events layer (`@ignex/nova/events`, opt-in via `createServer({ events })`) is
 the application-facing, event-driven surface on top of the transport: **an
 events file receives events, and a global emit sends events through
 websockets** — with first-class client records, named groups, and
@@ -9,7 +9,7 @@ cross-instance sync for horizontally scaled deployments.
 Enable it (everything else is opt-in):
 
 ```ts
-import { createServer } from "ignex-nova/server";
+import { createServer } from "@ignex/nova/server";
 
 const server = createServer({
   port: 3000,
@@ -20,7 +20,7 @@ const server = createServer({
 ```
 
 `server.events` is the hub; the module-global singleton
-(`ignex-nova/events`) is bound to it by default.
+(`@ignex/nova/events`) is bound to it by default.
 
 ## The events file (receiving events)
 
@@ -30,7 +30,7 @@ it and how to reply**:
 
 ```ts
 // app/events.ts
-import { on, emitToUser, emitToGroup } from "ignex-nova/events";
+import { on, emitToUser, emitToGroup } from "@ignex/nova/events";
 
 on("chat.message", (payload, ctx) => {
   // ctx.client — the sender's connection record (id, userId, data, groups…)
@@ -58,7 +58,7 @@ on("order.created", (payload, ctx) => {
 `emit` and friends are importable anywhere — no server reference needed:
 
 ```ts
-import { emit, emitToGroup, emitToUser, emitToClient, emitToTopic } from "ignex-nova/events";
+import { emit, emitToGroup, emitToUser, emitToClient, emitToTopic } from "@ignex/nova/events";
 
 emit("quote", { symbol: "AAPL", bid: 180.1, ask: 180.2 });          // broadcast
 emitToGroup("traders", "alert", { text: "halt" });                  // group fan-out

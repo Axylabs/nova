@@ -29,7 +29,7 @@ import { isDirectableEvent, plainTsType, toSnake } from "./schema-model";
 export function emitDirectSer(m: Model, ctx: EmitContext = {}): string {
   const directEvents = m.events.filter((ev) => isDirectableEvent(m, ev));
   const userMode = ctx.schemaImport === null;
-  const libImport = userMode ? (ctx.libraryImport ?? "ignex-nova") : "";
+  const libImport = userMode ? (ctx.libraryImport ?? "@ignex/nova") : "";
 
   const enumConsts = new Map<string, string>(); // enumName -> const name
   for (const e of m.enums) {

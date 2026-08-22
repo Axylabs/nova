@@ -3,24 +3,24 @@
  *
  * Re-exports the full typed pub/sub API (server + client + NATS bridge +
  * schema types + generic bindings codegen) so a single `import ... from
- * "ignex-nova"` works in Bun projects.
+ * "@ignex/nova"` works in Bun projects.
  *
  * For leaner / target-specific imports use the subpath entrypoints — each
  * resolves to its own source file and tree-shakes independently:
  *
- *   import { createServer } from "ignex-nova/server";     // Bun-only (Rust FFI)
- *   import { createClient } from "ignex-nova/client";     // browser + Bun
- *   import { createNatsBridge } from "ignex-nova/nats";   // standalone bridge
- *   import { on, emit } from "ignex-nova/events";         // events layer + global emit
- *   import { generateBindings } from "ignex-nova/generate"; // ANY-schema codegen
- *   import { assembleBindings, defaultBindings } from "ignex-nova/bindings";
- *   import { encodeUtf8Into } from "ignex-nova/internal";   // codegen helpers
+ *   import { createServer } from "@ignex/nova/server";     // Bun-only (Rust FFI)
+ *   import { createClient } from "@ignex/nova/client";     // browser + Bun
+ *   import { createNatsBridge } from "@ignex/nova/nats";   // standalone bridge
+ *   import { on, emit } from "@ignex/nova/events";         // events layer + global emit
+ *   import { generateBindings } from "@ignex/nova/generate"; // ANY-schema codegen
+ *   import { assembleBindings, defaultBindings } from "@ignex/nova/bindings";
+ *   import { encodeUtf8Into } from "@ignex/nova/internal";   // codegen helpers
  *
  * Note: the root entry also pulls in the Bun-only server + FFI path, so
- * browser bundles should import "ignex-nova/client" instead.
+ * browser bundles should import "@ignex/nova/client" instead.
  *
  * The README (and docs/publishing.md) covers consuming this from an npm
- * package: `bun add ignex-nova`, then use the subpaths above.
+ * package: `bun add @ignex/nova`, then use the subpaths above.
  */
 
 export type {
@@ -48,7 +48,7 @@ export { createClient } from "./public/client";
 export type { GeneratedBindings, GenerateOptions, SchemaRegistry } from "./public/generate";
 // ── generic bindings (ANY schema) ──────────────────────────────────────────
 export { generateBindings } from "./public/generate";
-// runtime helpers used by generated code (also exported via `ignex-nova/internal`)
+// runtime helpers used by generated code (also exported via `@ignex/nova/internal`)
 export {
   checkInt64,
   encodeUtf8Into,
@@ -66,7 +66,7 @@ export type {
   SubjectBuilder,
 } from "./public/nats";
 export { createNatsBridge, createSubjectBuilder } from "./public/nats";
-// events layer types (the runtime singleton API is `ignex-nova/events`)
+// events layer types (the runtime singleton API is `@ignex/nova/events`)
 export type {
   AuthResult,
   BackpressurePolicy,

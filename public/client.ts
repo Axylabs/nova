@@ -3,7 +3,7 @@
  * build stable). The implementation lives in the functional modules under
  * `src/core/`; this file just exposes the public surface.
  *
- *   import { createClient } from "ignex-nova/client";
+ *   import { createClient } from "@ignex/nova/client";
  *
  *   const client = createClient("ws://localhost:3000/ws", { reconnect: true });
  *   client.on("quote", (q) => { /* q: Events["quote"] — a plain object *\/ });
@@ -11,7 +11,7 @@
  *   client.send("chat", {...});     // typed client→server (server must allow it)
  *   client.connect();
  *
- *   // your own schema (see ignex-nova/generate):
+ *   // your own schema (see @ignex/nova/generate):
  *   const client = createClient("ws://localhost:3000/ws", { bindings });
  *   client.on("yourEvent", (e) => {...}); // typed against YOUR Events
  *

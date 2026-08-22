@@ -5,20 +5,24 @@ serializer — and a typed pub/sub API that hides all of it from developers.
 
 ```ts
 // server (Bun)
-import { createServer } from "ignex-nova/server";
-const server = createServer({ port: 3000, inbound: ["chat"] });
+import { createServer } from "@ignex/nova/server";
+const server = createServer({ port: 3000, inbound: ["trade"] });
 server.publish("quote", { symbol: "AAPL", bid: 180.1, ask: 180.2, bidSize: 100, askSize: 200, ts: Date.now() });
 server.publishToTopic("equities", "quote", {...});   // rooms
-server.on("chat", (msg, ws) => server.publishTo(ws, "chatAck", { ok: true }));
+server.on("trade", (msg, ws) =>
+  server.publishTo(ws, "quote", { symbol: msg.symbol, bid: msg.price, ask: msg.price, bidSize: 1, askSize: 1, ts: Date.now() }),
+);
 
 // FE (browser or Bun)
-import { createClient } from "ignex-nova/client";
+import { createClient } from "@ignex/nova/client";
 const client = createClient("ws://localhost:3000/ws", { reconnect: true });
 client.on("quote", (q) => console.log(q.symbol, q.bid)); // q is a plain typed object
 client.subscribe("equities");       // rooms + last-value replay
-client.send("chat", { text: "hi" }); // typed client→server (pure-JS encoder — works in the browser)
+client.send("trade", { symbol: "AAPL", price: 180.5, volume: 10, side: "buy", ts: Date.now() }); // typed client→server (pure-JS encoder — works in the browser)
 client.connect();
 ```
+
+> The built-in registry ships `quote`/`trade`/`portfolio`/`complex`/`order`/`bigVal` — custom events like `chat` require your own schema via `generateBindings` (see below).
 
 No `flatbuffers.Builder`, no `getRootAs*`, no FFI — developers only ever see
 plain, type-checked objects. The FlatBuffer + Rust machinery is internal, and
@@ -33,7 +37,7 @@ same APIs, same NATS story, your events:
 
 ```ts
 // scripts/generate-bindings.ts
-import { generateBindings } from "ignex-nova/generate";
+import { generateBindings } from "@ignex/nova/generate";
 import { schemas, events, controlEvents } from "../src/schema"; // YOUR TypeBox
 generateBindings({ schemas, events, controlEvents }, { outDir: "./ignex/generated" }).write();
 
@@ -77,7 +81,7 @@ the pure-JS encoder when no addon is present. Full guide:
   `joinGroup(id, group)`, or client `joinGroup` frames) target sets of clients.
   Active clients are listed via `getClients()` / `GET /clients`.
 - **Generic, schema-driven** — `generateBindings(schema)` (from
-  `ignex-nova/generate`) builds the whole wire stack for ANY TypeBox schema in
+  `@ignex/nova/generate`) builds the whole wire stack for ANY TypeBox schema in
   your app; `createServer` / `createClient` / `createNatsBridge` accept the
   resulting `bindings` and are fully typed against your events. The built-in
   events are just the default registry.
@@ -88,7 +92,7 @@ the pure-JS encoder when no addon is present. Full guide:
   forwards them to clients. `bridgeClientEvents: true` re-publishes client-sent
   events to the cluster (horizontal scaling). Best-effort (never blocks the WS
   hot path), observable via metrics.
-- **Events layer** (`ignex-nova/events`, opt-in via `createServer({ events })`)
+- **Events layer** (`@ignex/nova/events`, opt-in via `createServer({ events })`)
   — the application-facing event-driven system on top of the transport: an
   **events file** receives events (`server.events.on(...)` with a context
   carrying the sender's client record), a **global emit** sends events through
@@ -111,10 +115,10 @@ src/schema/index.ts (TypeBox — source of truth: app events + control events)
         ▼
 backend.fbs ──flatc --ts──▶ src/generated/ts/          (decoders)
         └───flatc --rust──▶ rust/src/generated/         (table builders)
-scripts/rust-glue-gen.ts ─▶ rust/src/transcode/         (JSON glue + direct-args FFI)
-scripts/direct-gen.ts ────▶ src/generated/direct-ser.ts (direct fast-path serde)
-scripts/ts-ser-gen.ts ─────▶ src/generated/ts-ser.ts    (pure-JS browser encoder)
-scripts/registry-gen.ts ───▶ src/generated/registry.ts  (event routing, both sides)
+src/codegen/rust-glue-gen.ts ─▶ rust/src/transcode/         (JSON glue + direct-args FFI)
+src/codegen/direct-gen.ts ────▶ src/generated/direct-ser.ts (direct fast-path serde)
+src/codegen/ts-ser-gen.ts ─────▶ src/generated/ts-ser.ts    (pure-JS browser encoder)
+src/codegen/registry-gen.ts ───▶ src/generated/registry.ts  (event routing, both sides)
 
 server:  JS object ─▶ (flat event) fields as direct FFI args ─▶ Rust
                    └▶ (vector/nested) JSON.stringify → cstring ─▶ Rust
@@ -188,15 +192,15 @@ Published as **TypeScript source** (no build step needed — Bun runs `.ts`
 natively), with subpath entrypoints. Works in any Bun ≥ 1.4 project:
 
 ```bash
-bun add ignex-nova
+bun add @ignex/nova
 ```
 
 ```ts
 // server (Bun-only — needs the native addon, see below)
-import { createServer } from "ignex-nova/server";
+import { createServer } from "@ignex/nova/server";
 
 // client (browser + Bun) — the root entry also re-exports everything
-import { createClient, type Events } from "ignex-nova/client";
+import { createClient, type Events } from "@ignex/nova/client";
 
 const q: Events["quote"] = { symbol: "AAPL", bid: 180.1, ask: 180.2, bidSize: 100, askSize: 200, ts: Date.now() };
 ```
@@ -205,20 +209,22 @@ Entrypoints:
 
 | Import | Resolves to |
 | --- | --- |
-| `ignex-nova` | `index.ts` — everything (server + client + nats + schema types + generic codegen) |
-| `ignex-nova/server` | `public/server.ts` — `createServer` (Bun-only) |
-| `ignex-nova/client` | `public/client.ts` — `createClient` (browser + Bun) |
-| `ignex-nova/nats` | `public/nats.ts` — standalone `createNatsBridge` |
-| `ignex-nova/generate` | `public/generate.ts` — `generateBindings` (ANY-schema codegen) |
-| `ignex-nova/bindings` | `public/bindings.ts` — `assembleBindings` / `defaultBindings` + types |
-| `ignex-nova/internal` | `public/internal.ts` — runtime helpers used by generated code |
+| `@ignex/nova` | `index.ts` — everything (server + client + nats + schema types + generic codegen) |
+| `@ignex/nova/server` | `public/server.ts` — `createServer` (Bun-only) |
+| `@ignex/nova/client` | `public/client.ts` — `createClient` (browser + Bun) |
+| `@ignex/nova/nats` | `public/nats.ts` — standalone `createNatsBridge` |
+| `@ignex/nova/events` | `public/events.ts` — events layer + global emit |
+| `@ignex/nova/generate` | `public/generate.ts` — `generateBindings` (ANY-schema codegen) |
+| `@ignex/nova/bindings` | `public/bindings.ts` — `assembleBindings` / `defaultBindings` + types |
+| `@ignex/nova/internal` | `public/internal.ts` — runtime helpers used by generated code |
+| `@ignex/nova/package.json` | `package.json` — version / metadata for tooling |
 
 **Native addon:** the tarball ships `rust/` source + `prebuilds/<platform>-<arch>/`
 for the platforms built at release (see CI). If your platform has a prebuild it
 just works. Otherwise either rebuild from the shipped source:
 
 ```bash
-cargo build --release --manifest-path node_modules/ignex-nova/rust/Cargo.toml
+cargo build --release --manifest-path node_modules/@ignex/nova/rust/Cargo.toml
 # loader finds it at <pkg>/rust/target/release/…
 # or point at any build explicitly:
 IGNEX_FFI_PATH=/abs/path/to/libignex_ffi.so bun run your-server.ts
@@ -233,7 +239,7 @@ staged, and published to npm.
 | --- | --- |
 | `src/schema/index.ts` | built-in TypeBox schemas + `events`/`controlEvents` registries (source of truth for the DEFAULT registry) |
 | `src/bindings/` | the generic `Bindings` contract: `types.ts` (runtime wire-stack interface + `EventNameOf`/`EventsOf`), `assemble.ts`, `default.ts` (built-in bindings) |
-| `src/codegen/` | the schema→wire emitters (published — `ignex-nova/generate` uses them at runtime) |
+| `src/codegen/` | the schema→wire emitters (published — `@ignex/nova/generate` uses them at runtime) |
 | `scripts/` | dev tooling: `generate.ts` orchestrator, prebuild/pack/release helpers (not published) |
 | `src/generated/` | flatc `--ts`/`--rust` output + `registry.ts` + `direct-ser.ts` + `ts-ser.ts` (built-in schema) |
 | `rust/` | cdylib: `ffi.rs` (C-ABI), `transcode/generated.rs` (glue) |
@@ -243,12 +249,12 @@ staged, and published to npm.
 | `src/bridge/` | optional NATS bridge: `nats.ts` (injectable transport, eager non-blocking connect), `subjects.ts` (subject naming) |
 | `public/server.ts` | entrypoint shim: `createServer` (publish/rooms/groups/targeting/NATS/auth/backpressure/metrics/drain) |
 | `public/client.ts` | entrypoint shim: `createClient` (on/send/subscribe/joinGroup/reconnect/heartbeat/status) |
-| `public/nats.ts` | entrypoint shim: `createNatsBridge` standalone (`ignex-nova/nats`) |
+| `public/nats.ts` | entrypoint shim: `createNatsBridge` standalone (`@ignex/nova/nats`) |
 | `client/` | browser demo (built to `client-dist/`) |
 | `bench/` | serialize latency + end-to-end throughput (+ `BASELINE.md` perf gate) |
 | `examples/` | `nats-consumer.ts` — independent NATS consumer for bridged frames |
 | `prebuilds/` | staged native addons per platform (`<platform>-<arch>/`), built by `bun run prebuild` / CI |
-| `docs/` | `wire-format.md`, `architecture.md`, `publishing.md` |
+| `docs/` | `wire-format.md`, `architecture.md`, `publishing.md`, `events.md`, `generic-bindings.md` |
 
 ## Adding an event
 
@@ -273,7 +279,7 @@ your app and run `generateBindings` (see
 
 Directable events serialize with **~0 B/op** (reusable scratch, no per-call
 allocations, no JSON). End-to-end over a real WebSocket (`bench:throughput`):
-**~1.18M msg/s**.
+**~1.09M msg/s** — see `bench/BASELINE.md` for the perf gate.
 
 ## Server options (all optional)
 
@@ -339,8 +345,8 @@ For your OWN schema, `generateBindings` emits the same `backend.fbs` +
 ## Events layer (the event-driven system)
 
 ```ts
-import { createServer } from "ignex-nova/server";
-import { on, emit, emitToUser } from "ignex-nova/events"; // global singleton
+import { createServer } from "@ignex/nova/server";
+import { on, emit, emitToUser } from "@ignex/nova/events"; // global singleton
 
 const server = createServer({
   port: 3000,
@@ -377,7 +383,7 @@ Publish directly from source — `bun publish` runs the release gate
 
 ```bash
 bun run release:dry    # plan only — print what would happen
-bun run release        # patch bump → verify → publish → commit/tag/push
+bun run release        # patch bump → verify → publish → commit + tag (push only with `--push`)
 bun run release minor  # minor bump
 bun run release --version 0.2.0   # explicit version
 ```

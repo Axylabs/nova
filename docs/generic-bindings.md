@@ -1,6 +1,6 @@
 # Generic bindings — bring your own schema
 
-`ignex-nova` is schema-driven: **any** TypeBox schema you define in your app can
+`@ignex/nova` is schema-driven: **any** TypeBox schema you define in your app can
 be turned into a full wire stack (FlatBuffers schema, TS decoders, pure-JS
 encoder, Rust FFI fast path, NATS wire registry) with one function call —
 `generateBindings(schema)` — and then served / consumed / bridged through the
@@ -11,7 +11,7 @@ against **your** events.
 your app
   src/schema.ts (TypeBox — source of truth)
         │  scripts/generate-bindings.ts
-        │  import { generateBindings } from "ignex-nova/generate";
+        │  import { generateBindings } from "@ignex/nova/generate";
         ▼
   ignex/generated/  (backend.fbs, ts/decoders, registry.ts, ts-ser.ts,
                      direct-ser.ts, wire-registry.json, rust/ crate, index.ts)
@@ -55,9 +55,11 @@ Rules (same as the built-in registry):
 
 ## 2. Generate bindings
 
+> `scripts/generate-bindings.ts` is an example filename **you** give a script in your own app — it is not a file shipped in the `@ignex/nova` package, so don't go looking for it in `node_modules`.
+
 ```ts
 // scripts/generate-bindings.ts — run once per schema change
-import { generateBindings } from "ignex-nova/generate";
+import { generateBindings } from "@ignex/nova/generate";
 import { schemas, events, controlEvents } from "../src/schema";
 
 const gen = generateBindings(
@@ -94,12 +96,12 @@ import { makeBindings } from "./ignex/generated"; // generated
 import * as schema from "../src/schema";
 
 export const bindings = makeBindings(schema);
-export type AppEvents = import("ignex-nova").EventsOf<typeof bindings>;
+export type AppEvents = import("@ignex/nova").EventsOf<typeof bindings>;
 ```
 
 ```ts
 // server.ts (Bun)
-import { createServer } from "ignex-nova/server";
+import { createServer } from "@ignex/nova/server";
 import { bindings } from "./bindings";
 
 const server = createServer({
@@ -114,7 +116,7 @@ server.on("chat", (msg, ws) => console.log(msg.room, msg.text));
 
 ```ts
 // FE (browser or Bun)
-import { createClient } from "ignex-nova/client";
+import { createClient } from "@ignex/nova/client";
 import { bindings } from "./bindings";
 
 const client = createClient("ws://localhost:3000/ws", { bindings });
