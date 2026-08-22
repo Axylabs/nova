@@ -4,7 +4,6 @@
  * `decide()` result; `doSend` is the single accounting point.
  */
 import type { ServerWebSocket } from "bun";
-import { encodeToScratch } from "../transport/transport";
 import { decide } from "./backpressure";
 import { RingBuffer } from "./ring";
 import type { ServerState, WsData } from "./state";
@@ -72,5 +71,5 @@ export function sendControl<K extends ControlEventName>(
   name: K,
   payload: ControlEvents[K],
 ): void {
-  sendFrame(state, ws, encodeToScratch(name, payload));
+  sendFrame(state, ws, state.transport.encodeToScratch(name, payload));
 }

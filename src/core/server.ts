@@ -4,12 +4,14 @@
  * `IgnServer` API object (no class, no `this`). This is the ONLY place that
  * knows how the pieces fit together.
  *
+ * Generic over the wire stack: `createServer({ bindings })` with your own
+ * generated bindings types `publish` / `on` / ... against YOUR events. The
+ * default is the built-in registry, so existing code keeps working unchanged.
+ *
  * Public entry: `public/server.ts` re-exports `createServer` + the types.
  */
 import type { ServerWebSocket } from "bun";
-import { WIRE_VERSION } from "../generated/registry";
-import type { Events, EventName } from "../schema";
-import { getEncodeStats, encodeToScratch } from "../transport/transport";
+import type { Bindings, DefaultBindings, EventNameOf, EventsOf } from "../bindings/types";
 import { setInt64GuardMode } from "./int64-guard";
 import type { MetricsSnapshot } from "./metrics";
 import { checkUpgrade } from "./auth";
@@ -25,10 +27,14 @@ import {
 } from "./groups";
 import { createServerState, type IgnServerOptions, type WsData } from "./state";
 import { createNatsBridge } from "../bridge/nats";
+import { createEventsHub, type EventsHubInternal } from "../events/hub";
+import type { EventsHub } from "../events/types";
 
 /** A snapshot of an active client (from `getClient` / `getClients` / GET /clients). */
 export interface ClientInfo {
   id: string;
+  /** identity this connection acts on behalf of (undefined if none) */
+  userId?: string;
   /** arbitrary app metadata from `authenticate` (undefined if none) */
   meta?: Record<string, unknown>;
   /** server-side groups this client belongs to */
@@ -44,6 +50,7 @@ export interface ClientInfo {
 function toClientInfo(ws: ServerWebSocket<WsData>): ClientInfo {
   return {
     id: ws.data.id,
+    userId: ws.data.userId,
     meta: ws.data.meta,
     groups: [...ws.data.groups],
     topics: [...ws.data.topics],
@@ -53,18 +60,24 @@ function toClientInfo(ws: ServerWebSocket<WsData>): ClientInfo {
 }
 
 /** The public server API (returned by `createServer`). */
-export interface IgnServer {
+export interface IgnServer<B extends Bindings = DefaultBindings> {
   readonly port: number;
   readonly clientCount: number;
   getMetrics(): MetricsSnapshot;
   /** Broadcast a typed event to every connected client (zero-alloc on the happy path). */
-  publish<K extends EventName>(name: K, payload: Events[K]): void;
+  publish<K extends EventNameOf<B>>(name: K, payload: EventsOf<B>[K]): void;
   /** Send a typed event to a single socket (zero-alloc on the happy path). */
-  publishTo<K extends EventName>(ws: ServerWebSocket<WsData>, name: K, payload: Events[K]): void;
+  publishTo<K extends EventNameOf<B>>(ws: ServerWebSocket<WsData>, name: K, payload: EventsOf<B>[K]): void;
   /** Publish a typed event to every socket subscribed to `topic`. */
-  publishToTopic<K extends EventName>(topic: string, name: K, payload: Events[K]): void;
+  publishToTopic<K extends EventNameOf<B>>(topic: string, name: K, payload: EventsOf<B>[K]): void;
   /** Send a typed event to a specific client by id. Returns false if that client is offline. */
-  publishToClient<K extends EventName>(id: string, name: K, payload: Events[K]): boolean;
+  publishToClient<K extends EventNameOf<B>>(id: string, name: K, payload: EventsOf<B>[K]): boolean;
+  /**
+   * Allow clients to send `name` (adds it to the inbound allowlist at runtime).
+   * The events layer calls this automatically when `server.events.on(name)` is
+   * first used.
+   */
+  allowInbound<K extends EventNameOf<B>>(name: K): IgnServer<B>;
   /** Programmatic room membership (clients can also join via subscribe frames). */
   join(topic: string, ws: ServerWebSocket<WsData>): void;
   leave(topic: string, ws: ServerWebSocket<WsData>): void;
@@ -74,7 +87,7 @@ export interface IgnServer {
   joinGroup(id: string, group: string): void;
   leaveGroup(id: string, group: string): void;
   /** Publish a typed event to every client in a server-side group. */
-  publishToGroup<K extends EventName>(group: string, name: K, payload: Events[K]): void;
+  publishToGroup<K extends EventNameOf<B>>(group: string, name: K, payload: EventsOf<B>[K]): void;
   /** Live server-side group names (with at least one member). */
   groups(): string[];
   /** Client ids currently in `group`. */
@@ -89,34 +102,45 @@ export interface IgnServer {
   /** Disconnect a client by id. Returns false if that client is offline. */
   disconnectClient(id: string): boolean;
   /** Register a handler for an inbound app event (must be in `options.inbound`). */
-  on<K extends EventName>(name: K, handler: (payload: Events[K], ws: ServerWebSocket<WsData>) => void): IgnServer;
-  off<K extends EventName>(name: K): IgnServer;
+  on<K extends EventNameOf<B>>(name: K, handler: (payload: EventsOf<B>[K], ws: ServerWebSocket<WsData>) => void): IgnServer<B>;
+  off<K extends EventNameOf<B>>(name: K): IgnServer<B>;
+  /**
+   * The events hub — present when `createServer({ events: {...} })` is used:
+   * typed handlers (`server.events.on`), client records, groups, and the
+   * cluster-aware emit surface.
+   */
+  readonly events?: EventsHub<B>;
   /** Graceful drain: stop accepting, wait up to `timeoutMs` for queues to flush. */
   drain(timeoutMs?: number): Promise<void>;
   stop(force?: boolean): void;
 }
 
-export function createServer(options: IgnServerOptions): IgnServer {
+export function createServer<B extends Bindings = DefaultBindings>(options: IgnServerOptions<B>): IgnServer<B> {
   const state = createServerState(options);
   setInt64GuardMode(options.int64Guard ?? "off");
+  const bindings = state.bindings;
 
   // NATS bridge (optional, best-effort — created eagerly, connects in the background)
   const natsOpt = options.nats;
-  if (natsOpt) state.bridge = "publish" in natsOpt ? natsOpt : createNatsBridge(natsOpt);
+  if (natsOpt) state.bridge = "publish" in natsOpt ? natsOpt : createNatsBridge(natsOpt, undefined, bindings);
 
   // Encode once + broadcast to every connected client (NO bridge) — the shared
   // hot path for `publish` and NATS-inbound forwarding. Loop prevention: inbound
   // events reach clients but are never re-bridged to NATS.
-  function fanOutAll(name: Parameters<typeof encodeToScratch>[0], payload: unknown): Uint8Array {
-    const frame = encodeToScratch(name, payload);
+  function fanOutAll(name: string, payload: unknown): Uint8Array {
+    const frame = state.transport.encodeToScratch(name, payload);
     state.metrics.published++;
     for (const ws of state.sockets) sendFrame(state, ws, frame);
     return frame;
   }
 
+  let eventsHub: EventsHubInternal<B> | undefined;
+
   if (state.bridge) {
     state.bridge.setOnInbound((name, payload) => {
       fanOutAll(name, payload);
+      // server-side handling of externally-published events (the events layer)
+      eventsHub?.dispatchBridgeInbound(name, payload);
     });
   }
 
@@ -150,13 +174,17 @@ export function createServer(options: IgnServerOptions): IgnServer {
         const existing = state.clients.get(ws.data.id);
         if (existing && existing !== ws) existing.close(1000, "replaced by newer session");
         state.clients.set(ws.data.id, ws);
+        // events-layer attach (client record + presence) BEFORE group seeding
+        state.onConnect?.(ws);
         for (const g of ws.data.groups) addToGroup(state, ws, g);
         // announce our wire version + capabilities so clients can negotiate
-        sendControl(state, ws, "hello", { version: WIRE_VERSION, caps: [], lastSeq: 0 });
+        sendControl(state, ws, "hello", { version: bindings.wireVersion, caps: [], lastSeq: 0 });
         // then assign identity so the client knows its id + server-side groups
         sendControl(state, ws, "welcome", { clientId: ws.data.id, groups: [...ws.data.groups] });
       },
       close: (ws) => {
+        // events-layer detach FIRST (client record still carries groups/topics)
+        state.onDisconnect?.(ws);
         state.sockets.delete(ws);
         state.clients.delete(ws.data.id);
         for (const g of ws.data.groups) removeFromGroup(state, ws, g);
@@ -170,7 +198,7 @@ export function createServer(options: IgnServerOptions): IgnServer {
     },
   });
 
-  const api: IgnServer = {
+  const api: IgnServer<B> = {
     get port(): number {
       return bun.port ?? 0;
     },
@@ -178,12 +206,15 @@ export function createServer(options: IgnServerOptions): IgnServer {
       return state.sockets.size;
     },
     getMetrics(): MetricsSnapshot {
-      const stats = getEncodeStats();
+      const stats = state.transport.getEncodeStats();
       for (const [name, n] of Object.entries(stats.direct)) {
         if (n > 0) state.metrics.countPath(name, "direct");
       }
       for (const [name, n] of Object.entries(stats.json)) {
         if (n > 0) state.metrics.countPath(name, "json");
+      }
+      for (const [name, n] of Object.entries(stats.js)) {
+        if (n > 0) state.metrics.countPath(name, "js");
       }
       const snapshot = state.metrics.snapshot(state.sockets.size);
       const b = state.bridge;
@@ -195,6 +226,7 @@ export function createServer(options: IgnServerOptions): IgnServer {
         snapshot.bridgeInboundErrors = b.stats.bridgeInboundErrors;
         snapshot.natsStatus = b.status;
       }
+      if (eventsHub) snapshot.events = eventsHub.metrics();
       return snapshot;
     },
     publish(name, payload) {
@@ -203,10 +235,10 @@ export function createServer(options: IgnServerOptions): IgnServer {
     },
     publishTo(ws, name, payload) {
       state.metrics.published++;
-      sendFrame(state, ws, encodeToScratch(name, payload));
+      sendFrame(state, ws, state.transport.encodeToScratch(name, payload));
     },
     publishToTopic(topic, name, payload) {
-      const frame = encodeToScratch(name, payload);
+      const frame = state.transport.encodeToScratch(name, payload);
       state.metrics.published++;
       publishToRoom(state, topic, frame);
       state.bridge?.publish(state.bridge.subjects.topic(topic, name), frame);
@@ -215,8 +247,12 @@ export function createServer(options: IgnServerOptions): IgnServer {
       const ws = state.clients.get(id);
       if (!ws) return false;
       state.metrics.published++;
-      sendFrame(state, ws, encodeToScratch(name, payload));
+      sendFrame(state, ws, state.transport.encodeToScratch(name, payload));
       return true;
+    },
+    allowInbound(name) {
+      state.inbound.add(name);
+      return api;
     },
     join(topic, ws) {
       joinRoom(state, ws, topic);
@@ -236,7 +272,7 @@ export function createServer(options: IgnServerOptions): IgnServer {
       if (ws) removeFromGroup(state, ws, group);
     },
     publishToGroup(group, name, payload) {
-      const frame = encodeToScratch(name, payload);
+      const frame = state.transport.encodeToScratch(name, payload);
       state.metrics.published++;
       publishToGroupState(state, group, frame);
       state.bridge?.publish(state.bridge.subjects.group(group, name), frame);
@@ -275,8 +311,12 @@ export function createServer(options: IgnServerOptions): IgnServer {
       state.inboundHandlers.delete(name);
       return api;
     },
+    get events(): EventsHub<B> | undefined {
+      return eventsHub;
+    },
     async drain(timeoutMs = 2000): Promise<void> {
       bun.stop(false); // stop listening; keep active sockets draining
+      await eventsHub?.close();
       await state.bridge?.close();
       const deadline = Date.now() + timeoutMs;
       while (state.sockets.size > 0 && Date.now() < deadline) {
@@ -286,9 +326,30 @@ export function createServer(options: IgnServerOptions): IgnServer {
     },
     stop(force = true): void {
       bun.stop(force);
+      void eventsHub?.close();
       void state.bridge?.close();
     },
   };
+
+  // ── events layer (opt-in) ─────────────────────────────────────────────
+  if (options.events) {
+    eventsHub = createEventsHub({
+      state,
+      server: api,
+      bindings,
+      serverBridge: state.bridge,
+      options: options.events,
+    });
+    state.onConnect = (ws) => {
+      eventsHub!.attach(ws);
+    };
+    state.onDisconnect = (ws) => {
+      eventsHub!.detach(ws);
+    };
+    state.onGroupChange = (group, ws, joined) => {
+      eventsHub!.onGroupChange(group, ws, joined);
+    };
+  }
 
   return api;
 }

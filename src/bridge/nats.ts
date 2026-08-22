@@ -11,14 +11,25 @@
  * inbound.>` and forwards decodable app events to `onInbound` (wired by the
  * server to fan out to clients). Control frames and unknown ids are dropped.
  *
+ * HORIZONTAL SCALING: when `bridgeClientEvents` is set, the server re-publishes
+ * every accepted client-sent event to `{prefix}.inbound.<event>` so OTHER
+ * server instances (and BE consumers) receive it — a cluster of servers sharing
+ * a prefix behaves as one hub (see docs/generic-bindings.md). Loop prevention:
+ * frames that arrive via NATS are forwarded to clients through `onInbound` and
+ * never re-bridged.
+ *
+ * GENERIC: `createNatsBridge(opts, transport?, bindings?)` decodes inbound
+ * frames with the given `Bindings` (default: the built-in registry), so the
+ * bridge works for ANY schema — the same wire bytes the server speaks.
+ *
  * The connection is created eagerly but non-blocking: `connect()` runs in the
  * background with a retry loop, so a server can start while NATS is down.
  * `createNatsBridge(opts, transport?)` accepts an injectable `NatsTransport`
  * so tests can fake NATS entirely (no server needed in CI).
  */
 import { connect, type NatsConnection } from "nats";
-import { decodePayload, isControlId, readFrameHeader } from "../generated/registry";
-import type { EventName } from "../schema";
+import type { Bindings } from "../bindings/types";
+import { defaultBindings } from "../bindings/default";
 import { createSubjectBuilder, type SubjectBuilder } from "./subjects";
 
 export type NatsBridgeStatus = "connected" | "connecting" | "closed";
@@ -26,8 +37,13 @@ export type NatsBridgeStatus = "connected" | "connecting" | "closed";
 export interface NatsBridgeOptions {
   /** NATS servers, default ["nats://localhost:4222"] */
   servers?: string[];
-  /** subject prefix, default "ignex" */
+  /** subject prefix, default "ignex" (or the bindings' subjectPrefix) */
   subjectPrefix?: string;
+  /**
+   * The wire stack used to decode inbound frames (default: built-in registry).
+   * Pass your own generated bindings so the bridge decodes YOUR events.
+   */
+  bindings?: Bindings;
   /** connect timeout (ms), default 5000 */
   connectTimeout?: number;
   /** how long to wait before retrying a failed initial connect (ms), default 2000 */
@@ -41,7 +57,13 @@ export interface NatsBridgeOptions {
   /** inbound subjects (default `{prefix}.inbound.>`), requires `inbound` */
   inboundSubjects?: string[];
   /** only forward these inbound events (default: every app event) */
-  inboundEvents?: EventName[];
+  inboundEvents?: string[];
+  /**
+   * Re-publish every accepted client-sent event to `{prefix}.inbound.<event>`
+   * so other servers in the cluster (and BE consumers) receive it, default
+   * false. See the horizontal-scaling docs.
+   */
+  bridgeClientEvents?: boolean;
 }
 
 /** Counters folded into `server.getMetrics()`. */
@@ -67,10 +89,18 @@ export interface NatsBridge {
   readonly status: NatsBridgeStatus;
   readonly subjects: SubjectBuilder;
   readonly stats: NatsBridgeStats;
+  /** whether client-sent events are re-published to `{prefix}.inbound.<event>` */
+  readonly clientEvents: boolean;
   /** publish a frame to `subject` (copies the bytes — safe after scratch reuse) */
   publish(subject: string, frame: Uint8Array): void;
+  /**
+   * Raw byte subscription (used by the events cluster layer). Unlike the
+   * inbound path this does NOT decode or forward — bytes are handed to `cb`
+   * verbatim, re-subscribed automatically after a NATS reconnect.
+   */
+  subscribeRaw(subject: string, cb: (data: Uint8Array) => void): () => void;
   /** wire the inbound → clients forward (set once by the server) */
-  setOnInbound(cb: (name: EventName, payload: unknown) => void): void;
+  setOnInbound(cb: (name: string, payload: unknown) => void): void;
   close(): Promise<void>;
 }
 
@@ -185,9 +215,11 @@ function createRealTransport(opts: NatsBridgeOptions): NatsTransport {
 export function createNatsBridge(
   opts: NatsBridgeOptions = {},
   transport?: NatsTransport,
+  bindings?: Bindings,
 ): NatsBridge {
+  const b = bindings ?? opts.bindings ?? defaultBindings;
   const t = transport ?? createRealTransport(opts);
-  const subjects = createSubjectBuilder(opts.subjectPrefix);
+  const subjects = createSubjectBuilder(opts.subjectPrefix ?? b.subjectPrefix ?? "ignex");
   const stats: NatsBridgeStats = {
     bridged: 0,
     bridgedBytes: 0,
@@ -196,26 +228,26 @@ export function createNatsBridge(
     bridgeInboundErrors: 0,
   };
   let closed = false;
-  let onInbound: ((name: EventName, payload: unknown) => void) | null = null;
+  let onInbound: ((name: string, payload: unknown) => void) | null = null;
   const allowlist = opts.inboundEvents ? new Set(opts.inboundEvents) : null;
 
   // inbound subscriptions (lazy — the transport queues them until connected)
   const subscribeInbound = (subject: string): (() => void) => {
     return t.subscribe(subject, (data) => {
-      const header = readFrameHeader(data);
+      const header = b.readFrameHeader(data);
       if (!header) {
         stats.bridgeInboundErrors++;
         return;
       }
-      if (isControlId(header.id)) {
+      if (b.isControlId(header.id)) {
         stats.bridgeInboundErrors++; // never forward transport-internal frames
         return;
       }
-      const name = header.name as EventName;
+      const name = header.name;
       if (allowlist && !allowlist.has(name)) return;
       let payload: unknown;
       try {
-        payload = decodePayload(header.id, data);
+        payload = b.decodePayload(header.id, data);
       } catch {
         stats.bridgeInboundErrors++;
         return;
@@ -242,6 +274,9 @@ export function createNatsBridge(
     get stats() {
       return stats;
     },
+    get clientEvents(): boolean {
+      return opts.bridgeClientEvents ?? false;
+    },
     publish(subject, frame) {
       if (!t.connected) {
         stats.bridgeErrors++;
@@ -259,6 +294,9 @@ export function createNatsBridge(
     },
     setOnInbound(cb) {
       onInbound = cb;
+    },
+    subscribeRaw(subject, cb) {
+      return t.subscribe(subject, (data) => cb(data));
     },
     async close() {
       closed = true;

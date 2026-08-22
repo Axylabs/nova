@@ -9,6 +9,8 @@ export interface PathCounts {
   direct: number;
   /** encodes that fell back to the JSON path (nested/unions or disabled symbol) */
   json: number;
+  /** encodes via the pure-JS encoder (user schema without a native addon) */
+  js: number;
 }
 
 export interface MetricsSnapshot {
@@ -29,7 +31,7 @@ export interface MetricsSnapshot {
   /** undecodable / version-mismatched / unknown-id frames received */
   protocolErrors: number;
   bytesSent: number;
-  /** per-event encode path counts (direct vs json) */
+  /** per-event encode path counts (direct vs json vs js) */
   pathCounts: Record<string, PathCounts>;
   connectedClients: number;
   uptimeMs: number;
@@ -41,6 +43,8 @@ export interface MetricsSnapshot {
   bridgeInboundErrors?: number;
   /** "connected" | "connecting" | "closed" (undefined when no bridge) */
   natsStatus?: string;
+  /** events-layer counters (present only when `createServer({ events })` is used) */
+  events?: import("../events/types").EventsMetricsSnapshot;
 }
 
 export interface Metrics {
@@ -55,7 +59,7 @@ export interface Metrics {
   bytesSent: number;
   readonly pathCounts: Map<string, PathCounts>;
   /** Count an encode on a given path for an event (direct = zero-alloc FFI). */
-  countPath(name: string, path: "direct" | "json"): void;
+  countPath(name: string, path: "direct" | "json" | "js"): void;
   snapshot(connectedClients: number): MetricsSnapshot;
 }
 
@@ -76,7 +80,7 @@ export function createMetrics(startedAt = Date.now()): Metrics {
     countPath(name, path) {
       let pc = pathCounts.get(name);
       if (!pc) {
-        pc = { direct: 0, json: 0 };
+        pc = { direct: 0, json: 0, js: 0 };
         pathCounts.set(name, pc);
       }
       pc[path]++;

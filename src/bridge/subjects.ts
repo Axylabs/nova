@@ -18,6 +18,8 @@ export interface SubjectBuilder {
   group(group: string, name: string): string;
   /** wildcard subject the server subscribes to for inbound events */
   inboundPrefix(): string;
+  /** concrete inbound subject for one event — used to re-publish client events into the cluster */
+  inboundEvent(name: string): string;
 }
 
 export function createSubjectBuilder(prefix = "ignex"): SubjectBuilder {
@@ -26,5 +28,6 @@ export function createSubjectBuilder(prefix = "ignex"): SubjectBuilder {
     topic: (topic, name) => `${prefix}.topic.${topic}.${name}`,
     group: (group, name) => `${prefix}.group.${group}.${name}`,
     inboundPrefix: () => `${prefix}.inbound.>`,
+    inboundEvent: (name) => `${prefix}.inbound.${name}`,
   };
 }

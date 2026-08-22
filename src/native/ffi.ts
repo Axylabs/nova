@@ -17,11 +17,16 @@
  *     `buffer`/`buffer_length` pair, fall back to explicit `(ptr, usize)`
  *     output pairs. The `abi()` transformer keeps the shipped specs canonical
  *     (`(ptr, usize)` outputs) and upgrades them at bind time.
+ *
+ * Generic: `bindFfi(req)` binds for ANY schema (`req` comes from a `Bindings`
+ * object — the built-in one or a user-generated one), and the bind-time
+ * self-test now ALSO verifies the cdylib's `fb_schema_fingerprint` matches the
+ * schema's fingerprint, so a schema-mismatched addon fails loudly instead of
+ * producing undecodable frames.
  */
 import { dlopen, type FFITypeOrString } from "bun:ffi";
-import { directSelfTest, directSymbols } from "../generated/direct-ser";
-import { eventNameToId, WIRE_HEADER_LEN, WIRE_VERSION } from "../generated/registry";
-import type { EventName } from "../schema";
+import type { Bindings, DirectTables } from "../bindings/types";
+import { defaultBindings } from "../bindings/default";
 import { getAddonPath } from "./loader";
 
 export const FB_PROBE_MAGIC = 0x4947_4e58; // "IGNX"
@@ -30,14 +35,16 @@ export interface BunFfi {
   /** (eventId, JSON string, out view) → bytes written; 0 = error; >cap = needed */
   fb_serialize(eventId: number, json: string, out: Uint8Array): number;
   fb_probe(): number;
-  /** Wire-format version of the cdylib (must equal generated WIRE_VERSION). */
+  /** Wire-format version of the cdylib (must equal the bindings' WIRE_VERSION). */
   fb_wire_version(): number;
+  /** Schema fingerprint of the cdylib (must equal the bindings' SCHEMA_FINGERPRINT). */
+  fb_schema_fingerprint(): number;
 }
 
 /** Output-buffer ABI mode of the live binding (set once by `bind()`). */
 export type BufferAbiMode = "buffer-pair" | "ptr-len";
 
-interface Dl {
+export interface FfiDl {
   bindings: BunFfi;
   /** every bound symbol, callable with raw args (…fieldArgs, out, out) */
   raw: Record<string, (...args: unknown[]) => number>;
@@ -46,7 +53,16 @@ interface Dl {
   bufferAbiMode: BufferAbiMode;
 }
 
-let cachedDl: Dl | null | undefined;
+/** What the FFI binder needs from a `Bindings` object (schema-specific parts). */
+export interface FfiRequirements {
+  readonly wireVersion: number;
+  readonly wireHeaderLen: number;
+  readonly schemaFingerprint: number;
+  readonly eventNameToId: Readonly<Record<string, number>>;
+  readonly direct?: DirectTables;
+}
+
+let cachedDl: FfiDl | null | undefined;
 let bufferAbiMode: BufferAbiMode = "ptr-len";
 
 const U64_FAST = "u64_fast" as unknown as FFITypeOrString;
@@ -117,7 +133,14 @@ function adaptOut(sym: (...a: unknown[]) => number, mode: BufferAbiMode): (...a:
   };
 }
 
-function bind(): Dl {
+/**
+ * Bind the cdylib for a specific schema (`req`). Throws on any self-test
+ * failure: missing addon, `fb_probe` magic mismatch, wire-version drift,
+ * schema-fingerprint drift (stale / mismatched addon), or a broken JSON path.
+ * Direct symbols that fail their per-symbol self-test are DISABLED (their
+ * events fall back to the JSON path) rather than throwing.
+ */
+export function bindFfi(req: FfiRequirements): FfiDl {
   const path = getAddonPath();
 
   // Probe the atomic `buffer`/`buffer_length` pair once; fall back to explicit
@@ -130,8 +153,9 @@ function bind(): Dl {
     fb_serialize: { args: abi(["u32", "cstring", "ptr", "usize"]), returns: U64_FAST },
     fb_probe: { args: [], returns: "u32" },
     fb_wire_version: { args: [], returns: "u32" },
+    fb_schema_fingerprint: { args: [], returns: U64_FAST },
   };
-  for (const [name, spec] of Object.entries(directSymbols)) {
+  for (const [name, spec] of Object.entries(req.direct?.symbols ?? {})) {
     specMap[name] = { args: abi(spec.args), returns: spec.returns as FFITypeOrString };
   }
 
@@ -147,24 +171,34 @@ function bind(): Dl {
     fb_serialize: (eventId, json, out) => raw["fb_serialize"]!(eventId, json, out, out) as number,
     fb_probe: () => raw["fb_probe"]!() as number,
     fb_wire_version: () => raw["fb_wire_version"]!() as number,
+    fb_schema_fingerprint: () => raw["fb_schema_fingerprint"]!() as number,
   };
 
   // ── Bind-time self-tests ─────────────────────────────────────────────
   if (bindings.fb_probe() !== FB_PROBE_MAGIC) {
     throw new Error(`ignex: FFI self-test failed (fb_probe mismatch) — addon at ${path}`);
   }
-  // Wire-version drift check: a stale cdylib (built from an older schema /
-  // envelope) must fail loudly at bind instead of producing undecodable frames.
-  if (bindings.fb_wire_version() !== WIRE_VERSION) {
+  // Wire-version drift check: a stale cdylib (built from an older envelope)
+  // must fail loudly at bind instead of producing undecodable frames.
+  if (bindings.fb_wire_version() !== req.wireVersion) {
     throw new Error(
-      `ignex: FFI self-test failed (wire version ${bindings.fb_wire_version()} !== ${WIRE_VERSION}) — addon at ${path}; regenerate + rebuild`,
+      `ignex: FFI self-test failed (wire version ${bindings.fb_wire_version()} !== ${req.wireVersion}) — addon at ${path}; regenerate + rebuild`,
+    );
+  }
+  // Schema-fingerprint check: a cdylib built from a DIFFERENT schema (e.g. the
+  // built-in addon loaded by a project with its own generated bindings) must
+  // fail loudly instead of silently encoding the wrong tables.
+  if (bindings.fb_schema_fingerprint() !== req.schemaFingerprint) {
+    throw new Error(
+      `ignex: FFI self-test failed (schema fingerprint ${bindings.fb_schema_fingerprint()} !== ${req.schemaFingerprint}) — ` +
+        `addon at ${path} was built from a different schema; build the addon from your generated rust/ crate (or unset IGNEX_FFI_PATH to use the pure-JS encoder)`,
     );
   }
   // JSON path sanity: `{}` → default frame for the FIRST event; verify the
   // frame invariant `out[0]` = WIRE_VERSION, `out[1..5]` = event id AND
   // `bytes_written === WIRE_HEADER_LEN + 4 + size_prefix`.
-  const firstEvent = Object.keys(eventNameToId)[0] as EventName;
-  const firstId = eventNameToId[firstEvent];
+  const firstEvent = Object.keys(req.eventNameToId)[0] as string;
+  const firstId = req.eventNameToId[firstEvent]!;
   const scratch = new Uint8Array(2048);
   const jw = bindings.fb_serialize(firstId, "{}", scratch);
   if (jw === 0 || jw > scratch.byteLength) {
@@ -172,41 +206,64 @@ function bind(): Dl {
   }
   {
     const dv = new DataView(scratch.buffer, scratch.byteOffset, scratch.byteLength);
-    const size = dv.getUint32(scratch.byteOffset + WIRE_HEADER_LEN, true);
+    const size = dv.getUint32(scratch.byteOffset + req.wireHeaderLen, true);
     const gotId = dv.getUint32(scratch.byteOffset + 1, true);
-    if (scratch[0] !== WIRE_VERSION || gotId !== firstId || jw !== WIRE_HEADER_LEN + 4 + size) {
+    if (scratch[0] !== req.wireVersion || gotId !== firstId || jw !== req.wireHeaderLen + 4 + size) {
       throw new Error(`ignex: FFI self-test failed (fb_serialize frame invariant) — addon at ${path}`);
     }
   }
   // Direct fast-path: probe every generated symbol; disable the failures so
   // their events gracefully fall back to the JSON path.
-  const disabledDirect = new Set(directSelfTest(raw, new Uint8Array(2048)));
+  const disabledDirect = new Set(req.direct ? req.direct.selfTest(raw, new Uint8Array(2048)) : []);
 
   return { bindings, raw, disabledDirect, bufferAbiMode };
 }
 
-function ensure(): Dl {
-  if (cachedDl === undefined) cachedDl = bind();
-  return cachedDl as Dl;
+/**
+ * Bind the cdylib for a `Bindings` object.
+ *   - `ffiMode: "required"` — bind or THROW (the built-in registry's contract).
+ *   - `ffiMode: "optional"` — used only when the user explicitly pointed at an
+ *     addon (`IGNEX_FFI_PATH`); any bind / self-test failure (missing addon,
+ *     schema mismatch, ...) returns `null`, and the transport falls back to the
+ *     pure-JS encoder. Warns once per schema fingerprint.
+ */
+const warnedOptional = new Set<number>();
+export function createFfi(bindings: Bindings): FfiDl | null {
+  if (bindings.ffiMode === "required") return bindFfi(bindings);
+  if (!process.env.IGNEX_FFI_PATH) return null; // no addon requested — pure JS
+  try {
+    return bindFfi(bindings);
+  } catch (err) {
+    if (!warnedOptional.has(bindings.schemaFingerprint)) {
+      warnedOptional.add(bindings.schemaFingerprint);
+      console.warn(`ignex: native addon unavailable for this schema — using the pure-JS encoder (${(err as Error).message})`);
+    }
+    return null;
+  }
 }
 
-/** Lazily bind once. Throws if the addon is missing or the self-test fails. */
+function ensureDefault(): FfiDl {
+  if (cachedDl === undefined) cachedDl = bindFfi(defaultBindings);
+  return cachedDl as FfiDl;
+}
+
+/** Lazily bind once (built-in registry). Throws if the addon is missing. */
 export function getFfi(): BunFfi {
-  return ensure().bindings;
+  return ensureDefault().bindings;
 }
 
-/** Output-buffer ABI mode of the live binding (lazy — triggers bind). */
+/** Output-buffer ABI mode of the live default binding (lazy — triggers bind). */
 export function getBufferAbiMode(): BufferAbiMode {
-  return ensure().bufferAbiMode;
+  return ensureDefault().bufferAbiMode;
 }
 
 /**
- * Direct fast-path symbol. Call it with `(…fieldArgs, outView, outView)` →
- * bytes written (0 = error, >cap = needed). Returns undefined if the symbol is
- * disabled by the bind-time self-test (its event falls back to the JSON path).
+ * Direct fast-path symbol (built-in registry). Call it with
+ * `(…fieldArgs, outView, outView)` → bytes written (0 = error, >cap = needed).
+ * Returns undefined if the symbol is disabled by the bind-time self-test.
  */
 export function getDirectSymbol(name: string): ((...args: unknown[]) => number) | undefined {
-  const dl = ensure();
+  const dl = ensureDefault();
   if (dl.disabledDirect.has(name)) return undefined;
   const symbol = dl.raw[name];
   if (!symbol) throw new Error(`ignex: unknown direct symbol "${name}"`);

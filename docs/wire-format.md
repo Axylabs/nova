@@ -113,8 +113,8 @@ Bridge state is observable via `server.getMetrics()`
 ### Decoding bridged frames (external consumers)
 
 `bun run generate` emits `src/generated/wire-registry.json` — a machine-readable
-`{ version, events: { name: id } }` map of the FNV-1a ids. A consumer in any
-language:
+`{ version, fingerprint, events: { name: id } }` map of the FNV-1a ids. A
+consumer in any language:
 
 1. reads `version` (byte 0) and `event_id` (bytes 1..5) from the frame,
 2. maps `event_id` → name via `wire-registry.json`,
@@ -122,6 +122,13 @@ language:
    `src/generated/fbs/backend.fbs`.
 
 See `examples/nats-consumer.ts` for a working reference.
+
+For YOUR OWN schema, `generateBindings` (see
+[docs/generic-bindings.md](generic-bindings.md)) emits the same
+`backend.fbs` + `wire-registry.json` into your project, plus a `fingerprint`
+field — the cdylib and the generated registry share it, so a schema-mismatched
+native addon fails the bind-time self-test instead of emitting undecodable
+frames.
 
 ## Heartbeat
 

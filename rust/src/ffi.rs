@@ -36,6 +36,16 @@ pub extern "C" fn fb_wire_version() -> u32 {
     WIRE_VERSION as u32
 }
 
+/// Schema fingerprint (FNV-1a 32 over the canonical model). The Bun side
+/// checks it against the generated `SCHEMA_FINGERPRINT` at bind time, so a
+/// cdylib built from a DIFFERENT schema (e.g. pointing `IGNEX_FFI_PATH` at the
+/// built-in addon from a project with its own generated bindings) fails loudly
+/// instead of producing frames the client can't decode.
+#[no_mangle]
+pub extern "C" fn fb_schema_fingerprint() -> u64 {
+    generated::SCHEMA_FINGERPRINT
+}
+
 // ── Diagnostic C-ABI probes (bench-only, NOT in the ffi.ts dlopen map) ─────
 //
 // Used ONLY by bench/ffi-margin.ts to isolate the fixed per-call FFI cost into

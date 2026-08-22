@@ -3,7 +3,8 @@
  * explicit state object the client action functions read/mutate. The option /
  * status types are the PUBLIC surface and are re-exported by `public/client.ts`.
  */
-import type { EventName, Events } from "../schema";
+import type { Bindings, DefaultBindings } from "../bindings/types";
+import { defaultBindings } from "../bindings/default";
 
 export type ClientStatus = "connecting" | "connected" | "disconnected" | "reconnecting" | "closed";
 
@@ -16,7 +17,14 @@ export interface IgnReconnectOptions {
   jitter?: boolean;
 }
 
-export interface IgnClientOptions {
+export interface IgnClientOptions<B extends Bindings = DefaultBindings> {
+  /**
+   * The wire stack (event ids, decoders, encoders). Defaults to the built-in
+   * registry; pass your own (from `generateBindings` + `assembleBindings`) to
+   * speak YOUR schema. When provided, the client API (`on` / `send` / ...) is
+   * typed against your `Events`.
+   */
+  bindings?: B;
   /** auto-reconnect on unexpected close, default false (boolean or options) */
   reconnect?: boolean | IgnReconnectOptions;
   /** app-level ping interval in ms (0 disables), default 15000 */
@@ -25,14 +33,14 @@ export interface IgnClientOptions {
   heartbeatMisses?: number;
 }
 
-type Handler<K extends EventName> = (payload: Events[K]) => void;
-
 export interface ClientState {
   url: string;
-  opts: IgnClientOptions;
+  opts: IgnClientOptions<Bindings>;
+  /** the wire stack this client speaks (ids / decoders / encoders). */
+  bindings: Bindings;
   ws: WebSocket | null;
-  handlers: Map<EventName, Set<Handler<never>>>;
-  anyHandlers: Set<(name: EventName, payload: unknown) => void>;
+  handlers: Map<string, Set<(payload: unknown) => void>>;
+  anyHandlers: Set<(name: string, payload: unknown) => void>;
   errorCbs: Set<(err: Error) => void>;
   statusCbs: Set<(status: ClientStatus) => void>;
   closed: boolean;
@@ -48,10 +56,14 @@ export interface ClientState {
   groups: string[];
 }
 
-export function createClientState(url: string, opts: IgnClientOptions = {}): ClientState {
+export function createClientState<B extends Bindings = DefaultBindings>(
+  url: string,
+  opts: IgnClientOptions<B> = {},
+): ClientState {
   return {
     url,
     opts,
+    bindings: opts.bindings ?? defaultBindings,
     ws: null,
     handlers: new Map(),
     anyHandlers: new Set(),

@@ -4,9 +4,10 @@
  * the timer can re-establish the socket.
  */
 import { setStatus, type ClientState, type IgnClientOptions, type IgnReconnectOptions } from "./client-state";
+import type { Bindings } from "../bindings/types";
 
 /** Resolve the effective reconnect options (defaults applied). */
-export function reconnectOpts(opts: IgnClientOptions): IgnReconnectOptions | null {
+export function reconnectOpts(opts: IgnClientOptions<Bindings>): IgnReconnectOptions | null {
   const rc = opts.reconnect;
   if (rc === undefined || rc === false) return null;
   if (rc === true) return { initialDelay: 250, maxDelay: 30000, jitter: true };

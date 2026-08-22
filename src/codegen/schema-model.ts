@@ -57,6 +57,21 @@ export interface Model {
   events: EventDef[];
 }
 
+/**
+ * Codegen context shared by every emitter. In-repo generation (scripts/
+ * generate.ts) leaves it empty and the generated files import the repo's own
+ * modules with relative paths. User-mode generation (public/generate.ts) sets
+ * `schemaImport: null` (the generated code emits self-contained local payload
+ * types instead of importing the user's schema module) and `libraryImport` to
+ * the package the internal helpers should come from.
+ */
+export interface EmitContext {
+  /** import specifier for schema TYPE imports ("../schema" in-repo). null → local types. */
+  schemaImport?: string | null;
+  /** user mode: where internal runtime helpers (codec / int64-guard / pooledByteBuffer / assembleBindings) come from. */
+  libraryImport?: string;
+}
+
 /** A table is "flat" when every field maps to a direct FFI arg (no tables/vectors). */
 export function isFlatTable(t: TableDef): boolean {
   return t.fields.every(
@@ -254,6 +269,44 @@ function resolveFieldType(
     default:
       return { kind: "string" };
   }
+}
+
+/** TS type expression for a plain-object field (used by user-mode codegen). */
+export function plainTsType(m: Model, f: FieldDef, suffix = "Payload"): string {
+  switch (f.kind) {
+    case "string":
+      return f.required ? "string" : "string | undefined";
+    case "double":
+      return "number";
+    case "int64":
+      return f.bigint ? "bigint" : "number";
+    case "bool":
+      return "boolean";
+    case "enum":
+      return enumUnion(m, f);
+    case "table":
+      return f.required ? `${f.tableName}${suffix}` : `${f.tableName}${suffix} | undefined`;
+    case "vector-string":
+      return `string[]${f.required ? "" : " | undefined"}`;
+    case "vector-double":
+      return `number[]${f.required ? "" : " | undefined"}`;
+    case "vector-int64":
+      return `number[]${f.required ? "" : " | undefined"}`;
+    case "vector-bool":
+      return `boolean[]${f.required ? "" : " | undefined"}`;
+    case "vector-enum":
+      return `(${enumUnion(m, f)})[]${f.required ? "" : " | undefined"}`;
+    case "vector-table":
+      return `${f.tableName}${suffix}[]${f.required ? "" : " | undefined"}`;
+    default:
+      return "unknown";
+  }
+}
+
+/** string literal union of the enum values, e.g. `"buy" | "sell"`. */
+export function enumUnion(m: Model, f: FieldDef): string {
+  const values = m.enums.find((e) => e.name === f.enumName)?.values ?? [];
+  return values.map((v) => JSON.stringify(v)).join(" | ");
 }
 
 export function buildModel(

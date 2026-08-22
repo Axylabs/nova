@@ -10,6 +10,10 @@
  *   server.publishTo(ws, "trade", { ... });
  *   server.join("equities", ws); server.publishToTopic("equities", "quote", {...});
  *
+ *   // your own schema (see ignex-nova/generate):
+ *   const server = createServer({ port: 3000, bindings });
+ *   server.publish("yourEvent", {...}); // typed against YOUR Events
+ *
  * Bun-only (bun:ffi + Bun.serve).
  */
 export { createServer, type IgnServer, type ClientInfo } from "../src/core/server";
@@ -33,3 +37,24 @@ export type {
   NatsBridgeStatus,
   NatsTransport,
 } from "../src/bridge/nats";
+// Events layer — re-exported so `createServer({ events })` is fully typed
+// without a separate import (the runtime API is `ignex-nova/events`).
+export type {
+  EventsHub,
+  EventsOptions,
+  EventsClusterOptions,
+  EventsMetricsSnapshot,
+  EventClient,
+  ClientData,
+  ClientGroup,
+  UserGroup,
+  EventContext,
+  EventHandler,
+  ServerEventHandler,
+  EmitTarget,
+  EmitTargetKind,
+  RemoteClient,
+  ClusterTransport,
+  ClusterStateStore,
+  RedisConnectionOptions,
+} from "../src/events/types";

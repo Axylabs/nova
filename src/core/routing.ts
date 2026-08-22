@@ -10,8 +10,7 @@
  * going to discard.
  */
 import type { ServerWebSocket } from "bun";
-import { decodePayload, isControlId, readFrameHeader, WIRE_VERSION } from "../generated/registry";
-import type { ControlEventName, ControlEvents, EventName } from "../schema";
+import type { ControlEventName, ControlEvents } from "../schema";
 import { sendControl } from "./outbound";
 import { joinRoom, leaveRoom } from "./rooms";
 import { joinGroup, leaveGroup } from "./groups";
@@ -31,20 +30,30 @@ export function handleMessage(
     ws.close(1009, "message too big");
     return;
   }
-  const header = readFrameHeader(bytes);
+  const header = state.bindings.readFrameHeader(bytes);
   if (!header) {
     state.metrics.protocolErrors++;
     return; // undecodable / wrong version / unknown id — drop
   }
-  if (isControlId(header.id)) {
+  if (state.bindings.isControlId(header.id)) {
     state.metrics.inboundControl++;
-    handleControl(state, ws, header.name as ControlEventName, decodePayload(header.id, bytes) as never);
+    handleControl(state, ws, header.name as ControlEventName, state.bindings.decodePayload(header.id, bytes) as never);
     return;
   }
-  const name = header.name as EventName;
+  const name = header.name;
   if (!state.inbound.has(name)) return; // not an allowed inbound event — no payload decode
   state.metrics.inbound++;
-  state.inboundHandlers.get(name)?.(decodePayload(header.id, bytes), ws);
+  state.inboundHandlers.get(name)?.(state.bindings.decodePayload(header.id, bytes), ws);
+  // Horizontal scaling: when the bridge is configured with `bridgeClientEvents`,
+  // every accepted client event is re-published to `{prefix}.inbound.<event>` so
+  // OTHER server instances (and BE consumers) receive it. NATS-inbound frames
+  // arrive via `onInbound` → `fanOutAll` (never through this path), so there is
+  // no loop; this server's own clients are re-delivered exactly once through its
+  // own inbound subscription (the app handler should therefore not ALSO
+  // broadcast, or the event would be delivered twice locally).
+  if (state.bridge?.clientEvents) {
+    state.bridge.publish(state.bridge.subjects.inboundEvent(name), bytes);
+  }
 }
 
 export function handleControl(
@@ -58,7 +67,7 @@ export function handleControl(
       const p = payload as ControlEvents["hello"];
       ws.data.version = p.version;
       ws.data.lastSeq = p.lastSeq;
-      if (p.version !== WIRE_VERSION) {
+      if (p.version !== state.bindings.wireVersion) {
         // protocol version mismatch — refuse this client
         ws.close(1002, "wire version mismatch");
       }

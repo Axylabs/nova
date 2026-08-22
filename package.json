@@ -48,6 +48,10 @@
     "./server": "./public/server.ts",
     "./client": "./public/client.ts",
     "./nats": "./public/nats.ts",
+    "./events": "./public/events.ts",
+    "./bindings": "./public/bindings.ts",
+    "./generate": "./public/generate.ts",
+    "./internal": "./public/internal.ts",
     "./package.json": "./package.json"
   },
   "publishConfig": {
@@ -57,7 +61,7 @@
     "generate": "bun scripts/generate.ts",
     "build:rust": "cargo build --release --manifest-path rust/Cargo.toml",
     "build:client": "bun build ./client/main.ts --outdir ./client-dist --target=browser --splitting",
-    "build:dist": "bun build ./index.ts ./public/server.ts ./public/client.ts ./public/nats.ts --outdir ./dist --target=bun --splitting && bunx tsc --emitDeclarationOnly -p tsconfig.dist.json",
+    "build:dist": "bun build ./index.ts ./public/server.ts ./public/client.ts ./public/nats.ts ./public/events.ts ./public/bindings.ts ./public/generate.ts ./public/internal.ts --outdir ./dist --target=bun --splitting && bunx tsc --emitDeclarationOnly -p tsconfig.dist.json",
     "build": "bun run generate && bun run build:rust && bun run build:client",
     "prebuild": "bun scripts/build-prebuild.ts",
     "test": "bun test",
@@ -85,5 +89,10 @@
   },
   "peerDependencies": {
     "typescript": "^7"
+  },
+  "peerDependenciesMeta": {
+    "ioredis": {
+      "optional": true
+    }
   }
 }

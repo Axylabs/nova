@@ -7,11 +7,13 @@
  * PUBLIC surface and are re-exported by `public/server.ts`.
  */
 import type { ServerWebSocket } from "bun";
-import type { EventName } from "../schema";
+import type { Bindings, DefaultBindings, EventNameOf } from "../bindings/types";
 import type { Int64GuardMode } from "./int64-guard";
 import { createMetrics, type Metrics } from "./metrics";
 import { RingBuffer } from "./ring";
 import type { NatsBridge, NatsBridgeOptions } from "../bridge/nats";
+import { defaultBindings } from "../bindings/default";
+import { createTransport, defaultTransport, type Transport } from "../transport/transport";
 
 /**
  * Optional identity metadata a client may carry for targeting / grouping.
@@ -20,6 +22,12 @@ import type { NatsBridge, NatsBridgeOptions } from "../bridge/nats";
 export interface ClientMeta {
   /** explicit client id; omitted → auto-assigned `crypto.randomUUID()` */
   id?: string;
+  /**
+   * The identity this connection acts ON BEHALF OF (e.g. the logged-in user).
+   * Several connections may share a `userId` (multi-tab / multi-device) — the
+   * events layer groups them for user-targeted emits (`hub.emitToUser`).
+   */
+  userId?: string;
   /** server-side groups this client belongs to on connect */
   groups?: string[];
   /** arbitrary app metadata (exposed via `getClient` / `getClients`) */
@@ -41,6 +49,8 @@ export interface WsData {
   groups: Set<string>;
   /** stable client id (auth metadata or auto-generated UUID) */
   id: string;
+  /** identity this connection acts on behalf of (undefined = anonymous) */
+  userId?: string;
   /** arbitrary app metadata from `authenticate` (undefined if none) */
   meta?: Record<string, unknown>;
   /** epoch ms when the socket opened (for `getClients` ordering/uptime) */
@@ -61,15 +71,22 @@ export interface IgnBackpressureOptions {
   maxQueue?: number;
 }
 
-export interface IgnServerOptions {
+export interface IgnServerOptions<B extends Bindings = DefaultBindings> {
   port: number;
   hostname?: string;
   /** seconds; 0 = no timeout */
   idleTimeout?: number;
   /** websocket path, default "/ws" */
   path?: string;
+  /**
+   * The wire stack (event ids, decoders, encoders). Defaults to the built-in
+   * registry; pass your own (from `generateBindings` + `assembleBindings`) to
+   * serve YOUR schema. When provided, the server API (`publish` / `on` / ...)
+   * is typed against your `Events`.
+   */
+  bindings?: B;
   /** app events clients are ALLOWED to send; control events are always allowed. default [] */
-  inbound?: EventName[];
+  inbound?: EventNameOf<B>[];
   /** slow-consumer protection. default: off (unbounded buffering) */
   backpressure?: IgnBackpressureOptions;
   /**
@@ -117,6 +134,13 @@ export interface IgnServerOptions {
    * NATS.
    */
   nats?: NatsBridgeOptions | NatsBridge;
+  /**
+   * Enable the events layer (typed event handlers + the global emit, client
+   * records with per-connection data, groups, optional cluster sync). Exposed
+   * as `server.events`; the module-global `emit`/`on` singleton
+   * (`ignex-nova/events`) is bound by default.
+   */
+  events?: import("../events/types").EventsOptions<B>;
   /** additional HTTP handler for non-ws routes (e.g. serving a static demo page) */
   fetch?: (req: Request) => Response | Promise<Response>;
 }
@@ -125,8 +149,12 @@ type InboundHandler = (payload: unknown, ws: ServerWebSocket<WsData>) => void;
 
 /** The full, explicit server state — created once per server, passed to actions. */
 export interface ServerState {
+  /** the wire stack this server speaks (ids / decoders / encoders). */
+  bindings: Bindings;
+  /** per-server encoder (scratch + FFI binding or pure-JS fallback). */
+  transport: Transport;
   path: string;
-  inbound: ReadonlySet<EventName>;
+  inbound: Set<string>;
   bp: Required<IgnBackpressureOptions> | null;
   metrics: Metrics;
   startedAt: number;
@@ -144,13 +172,21 @@ export interface ServerState {
   groups: Map<string, Set<ServerWebSocket<WsData>>>;
   /** optional NATS bridge (wired in createServer when `options.nats` is set) */
   bridge?: NatsBridge;
-  inboundHandlers: Map<EventName, InboundHandler>;
+  inboundHandlers: Map<string, InboundHandler>;
   topicHistory: Map<string, RingBuffer<{ seq: number; frame: Uint8Array }>>;
   replaySeq: number;
+  /** events-layer lifecycle hooks (wired by createServer when `events` is set) */
+  onConnect?: (ws: ServerWebSocket<WsData>) => void;
+  onDisconnect?: (ws: ServerWebSocket<WsData>) => void;
+  /** fired on ANY group membership change (auth seed, control frames, programmatic) */
+  onGroupChange?: (group: string, ws: ServerWebSocket<WsData>, joined: boolean) => void;
 }
 
-export function createServerState(options: IgnServerOptions): ServerState {
+export function createServerState<B extends Bindings = DefaultBindings>(options: IgnServerOptions<B>): ServerState {
+  const bindings = options.bindings ?? defaultBindings;
   return {
+    bindings,
+    transport: bindings === defaultBindings ? defaultTransport : createTransport(bindings),
     path: options.path ?? "/ws",
     inbound: new Set(options.inbound ?? []),
     bp: options.backpressure

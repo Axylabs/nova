@@ -21,6 +21,8 @@ export function joinGroup(state: ServerState, ws: ServerWebSocket<WsData>, group
     state.groups.set(group, set);
   }
   set.add(ws);
+  // events-layer hook (auth seed, control frames, programmatic joins all pass here)
+  state.onGroupChange?.(group, ws, true);
 }
 
 /** Remove `ws` from `group`; prune the group when it becomes empty. */
@@ -30,6 +32,7 @@ export function leaveGroup(state: ServerState, ws: ServerWebSocket<WsData>, grou
   if (!set) return;
   set.delete(ws);
   if (set.size === 0) state.groups.delete(group);
+  state.onGroupChange?.(group, ws, false);
 }
 
 /** Fan `frame` out to every member of `group` (no replay). */

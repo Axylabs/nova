@@ -24,6 +24,36 @@ No `flatbuffers.Builder`, no `getRootAs*`, no FFI — developers only ever see
 plain, type-checked objects. The FlatBuffer + Rust machinery is internal, and
 the **browser can send typed frames too** (via a generated pure-JS encoder).
 
+## Bring your own schema (generic bindings)
+
+The transport is **schema-driven**: the built-in events (quote/trade/…) are
+just the default registry. Define **any** TypeBox schema in your app and
+`generateBindings(schema)` produces a complete, typed wire stack for it —
+same APIs, same NATS story, your events:
+
+```ts
+// scripts/generate-bindings.ts
+import { generateBindings } from "ignex-nova/generate";
+import { schemas, events, controlEvents } from "../src/schema"; // YOUR TypeBox
+generateBindings({ schemas, events, controlEvents }, { outDir: "./ignex/generated" }).write();
+
+// bindings.ts
+import { makeBindings } from "./ignex/generated";
+import * as schema from "../src/schema";
+export const bindings = makeBindings(schema);
+
+// server.ts — publish/on typed against YOUR events; NATS bridging included
+const server = createServer({ port: 3000, bindings, inbound: ["chat"],
+  nats: { servers: ["nats://localhost:4222"], inbound: true, bridgeClientEvents: true } });
+server.publish("chat", { room: "lobby", text: "hi", ts: Date.now() });
+```
+
+The generated stack (flatc TS decoders + pure-JS encoder + direct fast-path
+serde + `wire-registry.json` for NATS consumers + an optional Rust crate for
+the FFI fast path) works without a Rust toolchain — the server falls back to
+the pure-JS encoder when no addon is present. Full guide:
+[docs/generic-bindings.md](docs/generic-bindings.md).
+
 ## Features
 
 - **Typed pub/sub, both directions** — `publish`/`publishTo`/`publishToTopic`
@@ -46,12 +76,30 @@ the **browser can send typed frames too** (via a generated pure-JS encoder).
   server-side groups (`publishToGroup(group, …)`, joined via auth metadata,
   `joinGroup(id, group)`, or client `joinGroup` frames) target sets of clients.
   Active clients are listed via `getClients()` / `GET /clients`.
+- **Generic, schema-driven** — `generateBindings(schema)` (from
+  `ignex-nova/generate`) builds the whole wire stack for ANY TypeBox schema in
+  your app; `createServer` / `createClient` / `createNatsBridge` accept the
+  resulting `bindings` and are fully typed against your events. The built-in
+  events are just the default registry.
 - **NATS bridge (bidirectional)** — every broadcast/topic/group publish is also
   published to NATS as the **same FlatBuffer wire frame** (`ignex.broadcast.*`,
   `ignex.topic.*`, `ignex.group.*`) so other applications can consume it;
   external apps push events into the hub via `ignex.inbound.>` and the server
-  forwards them to clients. Best-effort (never blocks the WS hot path),
-  observable via metrics.
+  forwards them to clients. `bridgeClientEvents: true` re-publishes client-sent
+  events to the cluster (horizontal scaling). Best-effort (never blocks the WS
+  hot path), observable via metrics.
+- **Events layer** (`ignex-nova/events`, opt-in via `createServer({ events })`)
+  — the application-facing event-driven system on top of the transport: an
+  **events file** receives events (`server.events.on(...)` with a context
+  carrying the sender's client record), a **global emit** sends events through
+  websockets from anywhere (`emit` / `emitToGroup` / `emitToUser` /
+  `emitToClient`), **client records** model "who is connected, on whose behalf
+  (`userId`), and what to remember per connection (`client.data`)", **client
+  groups vs user groups** make group-vs-user targeting explicit, and an
+  optional **cluster sync** (NATS and/or Redis, offloaded from hot paths)
+  delivers every emit to the target's clients across horizontally scaled
+  instances, with presence + shared-state indexes. See
+  [docs/events.md](docs/events.md).
 - **Bun-only server, browser+Bun client.** Wire spec documented for independent
   clients: [docs/wire-format.md](docs/wire-format.md).
 
@@ -157,10 +205,13 @@ Entrypoints:
 
 | Import | Resolves to |
 | --- | --- |
-| `ignex-nova` | `index.ts` — everything (server + client + nats + schema types) |
+| `ignex-nova` | `index.ts` — everything (server + client + nats + schema types + generic codegen) |
 | `ignex-nova/server` | `public/server.ts` — `createServer` (Bun-only) |
 | `ignex-nova/client` | `public/client.ts` — `createClient` (browser + Bun) |
 | `ignex-nova/nats` | `public/nats.ts` — standalone `createNatsBridge` |
+| `ignex-nova/generate` | `public/generate.ts` — `generateBindings` (ANY-schema codegen) |
+| `ignex-nova/bindings` | `public/bindings.ts` — `assembleBindings` / `defaultBindings` + types |
+| `ignex-nova/internal` | `public/internal.ts` — runtime helpers used by generated code |
 
 **Native addon:** the tarball ships `rust/` source + `prebuilds/<platform>-<arch>/`
 for the platforms built at release (see CI). If your platform has a prebuild it
@@ -180,9 +231,11 @@ staged, and published to npm.
 
 | Path | Role |
 | --- | --- |
-| `src/schema/index.ts` | TypeBox schemas + `events`/`controlEvents` registries (source of truth) |
-| `scripts/` | `generate.ts` orchestrator + `.fbs` / Rust-glue / registry / ts-ser emitters |
-| `src/generated/` | flatc `--ts`/`--rust` output + `registry.ts` + `direct-ser.ts` + `ts-ser.ts` |
+| `src/schema/index.ts` | built-in TypeBox schemas + `events`/`controlEvents` registries (source of truth for the DEFAULT registry) |
+| `src/bindings/` | the generic `Bindings` contract: `types.ts` (runtime wire-stack interface + `EventNameOf`/`EventsOf`), `assemble.ts`, `default.ts` (built-in bindings) |
+| `src/codegen/` | the schema→wire emitters (published — `ignex-nova/generate` uses them at runtime) |
+| `scripts/` | dev tooling: `generate.ts` orchestrator, prebuild/pack/release helpers (not published) |
+| `src/generated/` | flatc `--ts`/`--rust` output + `registry.ts` + `direct-ser.ts` + `ts-ser.ts` (built-in schema) |
 | `rust/` | cdylib: `ffi.rs` (C-ABI), `transcode/generated.rs` (glue) |
 | `src/native/` | `bun:ffi` binding, self-tests, per-platform addon loader |
 | `src/transport/` | `transport.ts` (`encodeToScratch`), `scratch.ts` (reusable zero-alloc buffer), `stats.ts` |
@@ -199,12 +252,16 @@ staged, and published to npm.
 
 ## Adding an event
 
-1. Define the payload in `schema/index.ts` (TypeBox), add it to `schemas`
-   (if it's a named table) and to `events` (name → schema). For exact integer
-   values use `Type.BigInt()`.
-2. Re-run `bun run generate`, `cargo build --release`, `bun run build:client`.
-3. `server.publish("yourEvent", payload)`, `client.on("yourEvent", cb)`, and
-   `client.send("yourEvent", payload)` are now fully typed on both sides.
+**Built-in registry:** 1. Define the payload in `schema/index.ts` (TypeBox), add
+it to `schemas` (if it's a named table) and to `events` (name → schema). For
+exact integer values use `Type.BigInt()`. 2. Re-run `bun run generate`,
+`cargo build --release`, `bun run build:client`. 3.
+`server.publish("yourEvent", payload)`, `client.on("yourEvent", cb)`, and
+`client.send("yourEvent", payload)` are now fully typed on both sides.
+
+**Your own registry:** you don't edit this repo at all — define the schema in
+your app and run `generateBindings` (see
+[docs/generic-bindings.md](docs/generic-bindings.md)).
 
 ## Performance (min-of-N ns/op on this machine, `bun run bench:serialize`)
 
@@ -275,6 +332,43 @@ client.onStatus(() => console.log("my id:", client.clientId));
 NATS consumers (any language) decode bridged frames from
 `src/generated/fbs/backend.fbs` + the FNV-1a id map in `src/generated/wire-registry.json`
 — see [docs/wire-format.md](docs/wire-format.md) and `examples/nats-consumer.ts`.
+For your OWN schema, `generateBindings` emits the same `backend.fbs` +
+`wire-registry.json` into your project — see
+[docs/generic-bindings.md](docs/generic-bindings.md).
+
+## Events layer (the event-driven system)
+
+```ts
+import { createServer } from "ignex-nova/server";
+import { on, emit, emitToUser } from "ignex-nova/events"; // global singleton
+
+const server = createServer({
+  port: 3000,
+  events: {
+    onConnect: (client) => client.data.set("since", client.connectedAt),
+    cluster: { nats: true },           // optional: cross-instance sync
+  },
+});
+
+// the events file — receive events (ctx carries the sender's client record)
+on("chat.message", (payload, ctx) => {
+  emitToUser(payload.to, "chat.delivered", { id: payload.id });
+});
+
+// the global emit — send events through websockets from anywhere
+emit("quote", { symbol: "AAPL", bid: 180.1, ask: 180.2 });          // broadcast
+emitToUser("u-42", "order.update", { orderId: "o-1" });             // a user's sockets
+emit("alert", { text: "halt" }, { type: "group", group: "traders" }); // to a group
+
+// client records: id / userId (on whose behalf) / data / groups
+server.events.client("c-1")?.data.set("tier", "gold");
+server.events.clientsByUser("u-42");   // every device of u-42
+server.events.userGroup("ops").add("u-42").emit("pager", { text: "…" });
+```
+
+Full API, cluster semantics, presence, shared-state (Redis) indexes and
+performance notes: **[docs/events.md](docs/events.md)**. The events layer is
+opt-in — without `events`, there is zero overhead.
 
 ## Publishing to npm
 

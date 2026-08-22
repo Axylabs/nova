@@ -47,6 +47,7 @@ export async function checkUpgrade(
     topics: new Set(),
     groups: new Set(authMeta?.groups ?? []),
     id,
+    userId: authMeta?.userId,
     meta: authMeta?.meta,
     connectedAt: Date.now(),
   };

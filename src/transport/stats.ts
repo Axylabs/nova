@@ -8,8 +8,8 @@
  * increment — no Map.get + Map.set churn per encode.
  */
 export interface EncodeStats {
-  bump(name: string, path: "direct" | "json"): void;
-  get(): { direct: Record<string, number>; json: Record<string, number> };
+  bump(name: string, path: "direct" | "json" | "js"): void;
+  get(): { direct: Record<string, number>; json: Record<string, number>; js: Record<string, number> };
 }
 
 /** Mutable counter box — allocated once per (event, path), incremented in place. */
@@ -26,10 +26,14 @@ function toObj(m: Map<string, Counter>): Record<string, number> {
 export function createStats(): EncodeStats {
   const direct = new Map<string, Counter>();
   const json = new Map<string, Counter>();
+  const js = new Map<string, Counter>();
 
   return {
     bump(name, path) {
-      const m = path === "direct" ? direct : json;
+      let m: Map<string, Counter>;
+      if (path === "direct") m = direct;
+      else if (path === "json") m = json;
+      else m = js;
       let c = m.get(name);
       if (!c) {
         c = { n: 0 };
@@ -38,7 +42,7 @@ export function createStats(): EncodeStats {
       c.n++;
     },
     get() {
-      return { direct: toObj(direct), json: toObj(json) };
+      return { direct: toObj(direct), json: toObj(json), js: toObj(js) };
     },
   };
 }

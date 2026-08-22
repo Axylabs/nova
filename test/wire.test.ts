@@ -7,7 +7,7 @@
  *   - the frame layout is exactly [version][id:4][size-prefixed flatbuffer]
  */
 import { describe, expect, test } from "bun:test";
-import { fnv1a32 } from "../scripts/hash";
+import { fnv1a32 } from "../src/codegen/hash";
 import { encodeEvent } from "../src/transport/transport";
 import {
   decodeFrame,

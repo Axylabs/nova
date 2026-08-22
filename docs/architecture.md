@@ -5,18 +5,30 @@ a Rust FFI serializer — hidden behind a typed pub/sub API.
 
 ## Pipeline
 
+The wire stack is generated from TypeBox schemas. The built-in registry
+(`src/schema/index.ts`) runs the in-repo orchestrator (`scripts/generate.ts`);
+**any** app can run the same emitters on its own schema via
+`generateBindings` (`ignex-nova/generate` → `src/codegen/`).
+
 ```
 src/schema/index.ts (TypeBox — single source of truth: app events + control events)
-        │  scripts/generate.ts
+        │  scripts/generate.ts   (or generateBindings() for YOUR schema)
         ▼
 backend.fbs ──flatc --ts──▶ src/generated/ts/          (decoders, both sides)
         └───flatc --rust──▶ rust/src/generated/         (table builders)
-scripts/rust-glue-gen.ts ─▶ rust/src/transcode/         (JSON glue + direct-args FFI)
-scripts/direct-gen.ts ────▶ src/generated/direct-ser.ts (zero-alloc server encoder)
-scripts/ts-ser-gen.ts ─────▶ src/generated/ts-ser.ts    (pure-JS browser encoder)
-scripts/registry-gen.ts ───▶ src/generated/registry.ts  (event routing, both sides)
-scripts/generate.ts ────────▶ src/generated/wire-registry.json (name→id map for external consumers)
+src/codegen/rust-glue-gen.ts ─▶ rust/src/transcode/     (JSON glue + direct-args FFI)
+src/codegen/direct-gen.ts ────▶ src/generated/direct-ser.ts (zero-alloc server encoder)
+src/codegen/ts-ser-gen.ts ─────▶ src/generated/ts-ser.ts    (pure-JS browser encoder)
+src/codegen/registry-gen.ts ───▶ src/generated/registry.ts  (event routing, both sides)
+scripts/generate.ts ───────────▶ src/generated/wire-registry.json (name→id map for external consumers)
 ```
+
+Every artifact is also emitted per-user-schema by `generateBindings`
+(`src/codegen/*` emitters, `public/generate.ts`) into the app's
+`ignex/generated/` folder, then assembled into a runtime `Bindings`
+(`src/bindings/`) that `createServer` / `createClient` / `createNatsBridge`
+accept via `options.bindings` (default: the built-in `defaultBindings`). See
+[docs/generic-bindings.md](generic-bindings.md).
 
 ## Functional composition
 
@@ -88,9 +100,22 @@ frames) are encoded by `generated/ts-ser.ts` — flatc's object API (`XxxT` +
   subject builders (`ignex.broadcast.*` / `ignex.topic.*` / `ignex.group.*` /
   inbound `ignex.inbound.>`). Outbound frames are copied from the shared
   scratch; inbound frames are decoded via `readFrameHeader`/`decodePayload` and
-  forwarded to clients (never re-bridged).
+  forwarded to clients (never re-bridged). `subscribeRaw` exposes raw byte
+  subscriptions (re-subscribed on reconnect) for the events cluster layer.
 - `src/core/metrics.ts`, `src/core/int64-guard.ts` — `createMetrics()` factory
   + the exact-int64 safety net.
+- `src/events/*` — the events layer (opt-in via `createServer({ events })`,
+  public entry `ignex-nova/events` → `public/events.ts`): `hub.ts` composition
+  root (`server.events`, binds the module-global `emit`/`on` singleton),
+  `types.ts` (`EventClient` records with `userId` + per-connection `data`,
+  `EmitTarget` discriminated union, hub/options interfaces), `registry.ts`
+  (multi-handler dispatch with isolation), `clients.ts`/`data.ts` (client
+  store: byId + byUser index), `groups.ts` (client groups reusing the
+  transport registry + user groups), `emit.ts` (encode-once local fan-out +
+  bridge + cluster), `cluster.ts` (origin-tagged envelope, NATS/Redis/custom
+  transports, presence, shared-state indexes), `queue.ts` (bounded offload
+  workers that keep all cluster/state work off the WS hot path), `global.ts`
+  (the importable `emit`/`emitToGroup`/… singleton).
 - `src/transport/{transport,scratch,stats}.ts` — object → frame encoding:
   `encodeToScratch` (direct/JSON), the reusable zero-alloc scratch, and
   encode-path stats.

@@ -7,6 +7,9 @@
  *
  * Most apps don't need this directly — pass `nats` to `createServer` and the
  * server bridges broadcast / topic / group publishes automatically.
+ *
+ * Generic: pass your own generated bindings so inbound frames decode YOUR
+ * events: `createNatsBridge({ servers, bindings })`.
  */
 export { createNatsBridge } from "../src/bridge/nats";
 export type {

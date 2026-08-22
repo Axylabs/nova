@@ -1,11 +1,10 @@
 /**
  * Client wire handling — outbound frame sends + inbound decode/dispatch.
  * `handleMessage` decodes the envelope, filters control frames, and fans app
- * events out to the registered handlers.
+ * events out to the registered handlers. All decode/encode goes through
+ * `state.bindings`, so a client speaks whatever wire stack it was given.
  */
-import { decodeFrame, isControlId, WIRE_VERSION } from "../generated/registry";
-import { encodeEventFrame } from "../generated/ts-ser";
-import type { ControlEventName, ControlEvents, EventName } from "../schema";
+import type { ControlEventName, ControlEvents } from "../schema";
 import type { ClientState } from "./client-state";
 
 /** Send an encoded frame, if the socket is open. */
@@ -21,7 +20,7 @@ export function sendControl<K extends ControlEventName>(
   name: K,
   payload: ControlEvents[K],
 ): void {
-  sendFrame(state, encodeEventFrame(name, payload));
+  sendFrame(state, state.bindings.encodeFrame(name, payload));
 }
 
 export function emitError(state: ClientState, err: Error): void {
@@ -32,10 +31,10 @@ export function handleControl(state: ClientState, name: ControlEventName, payloa
   switch (name) {
     case "hello": {
       const p = payload as ControlEvents["hello"];
-      if (p.version !== WIRE_VERSION) {
+      if (p.version !== state.bindings.wireVersion) {
         // server speaks a different wire version — refuse + surface
         state.ws?.close(1002, "wire version mismatch");
-        emitError(state, new Error(`ignex: server wire version ${p.version} does not match ${WIRE_VERSION}`));
+        emitError(state, new Error(`ignex: server wire version ${p.version} does not match ${state.bindings.wireVersion}`));
       }
       break;
     }
@@ -56,17 +55,17 @@ export function handleControl(state: ClientState, name: ControlEventName, payloa
 export function handleMessage(state: ClientState, data: ArrayBuffer | string): void {
   if (typeof data === "string") return; // ignore text frames
   const bytes = data instanceof ArrayBuffer ? new Uint8Array(data) : (data as Uint8Array);
-  const frame = decodeFrame(bytes);
+  const frame = state.bindings.decodeFrame(bytes);
   if (!frame) {
     emitError(state, new Error("ignex: undecodable / version-mismatched frame dropped"));
     return;
   }
-  if (isControlId(frame.id)) {
+  if (state.bindings.isControlId(frame.id)) {
     handleControl(state, frame.name as ControlEventName, frame.payload);
     return;
   }
-  const name = frame.name as EventName;
+  const name = frame.name;
   const set = state.handlers.get(name);
-  if (set) for (const cb of set) cb(frame.payload as never);
+  if (set) for (const cb of set) cb(frame.payload);
   for (const cb of state.anyHandlers) cb(name, frame.payload);
 }

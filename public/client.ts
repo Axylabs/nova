@@ -11,6 +11,10 @@
  *   client.send("chat", {...});     // typed client→server (server must allow it)
  *   client.connect();
  *
+ *   // your own schema (see ignex-nova/generate):
+ *   const client = createClient("ws://localhost:3000/ws", { bindings });
+ *   client.on("yourEvent", (e) => {...}); // typed against YOUR Events
+ *
  * Works in the browser (bundle with `bun build --target=browser`) AND in Bun.
  * Outgoing frames are encoded by the generated PURE-JS encoder — no Rust FFI
  * needed, so the browser can send too.
