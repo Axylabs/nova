@@ -40,7 +40,9 @@ export function emitRegistry(m: Model, fingerprint: number, ctx: EmitContext = {
   const userMode = ctx.schemaImport === null;
   const schemaImport = userMode ? "" : (ctx.schemaImport ?? "../schema");
   const poolImport = userMode
-    ? (ctx.libraryImport ?? "@ignex/nova")
+    ? (ctx.libraryImport === undefined || ctx.libraryImport === "@ignex/nova"
+        ? "@ignex/nova/internal"
+        : ctx.libraryImport)
     : "../transport/byte-buffer-pool";
 
   const lines: string[] = [];

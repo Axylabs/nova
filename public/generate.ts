@@ -164,7 +164,13 @@ export function generateBindings(
   options: GenerateOptions = {},
 ): GeneratedBindings {
   const wireVersion = options.wireVersion ?? WIRE_VERSION;
-  const libraryImport = options.libraryImport ?? "@ignex/nova";
+  // Default: the FFI-free entry points. The package barrel ("@ignex/nova")
+  // pulls in bun:ffi at import time, which breaks vitest/node/browser module
+  // runners consuming generated bindings. Custom libraryImport values (e.g. a
+  // relative path to the repo in tests) keep the legacy single-import behavior.
+  const isDefaultLib = options.libraryImport === undefined || options.libraryImport === "@ignex/nova";
+  const libraryImport = options.libraryImport ?? "@ignex/nova/bindings";
+  const helperImport = isDefaultLib ? "@ignex/nova/internal" : libraryImport;
 
   // The standard transport control protocol is always present; users may add
   // custom control events but never override the standard ones.
@@ -246,8 +252,16 @@ export function generateBindings(
   }
 
   // Generated TS stack (user mode: self-contained local types + library imports)
-  files["registry.ts"] = emitRegistry(model, fingerprint, { schemaImport: null, libraryImport });
-  files["direct-ser.ts"] = emitDirectSer(model, { schemaImport: null, libraryImport });
+  // registry + direct-ser need the runtime HELPERS (@ignex/nova/internal in the
+  // default case); index.ts needs assembleBindings (@ignex/nova/bindings).
+  files["registry.ts"] = emitRegistry(model, fingerprint, {
+    schemaImport: null,
+    libraryImport: helperImport,
+  });
+  files["direct-ser.ts"] = emitDirectSer(model, {
+    schemaImport: null,
+    libraryImport: helperImport,
+  });
   files["ts-ser.ts"] = emitTsSer(model, { schemaImport: null });
 
   const subjectPrefix = options.subjectPrefix ?? "ignex";
