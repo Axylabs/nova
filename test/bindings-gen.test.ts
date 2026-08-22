@@ -99,6 +99,12 @@ describe("generateBindings (any schema)", () => {
     // direct-ser.ts keys must be quoted (a bare `fb_chat.send_serialize:` is
     // invalid TS for dotted event names).
     expect(files["direct-ser.ts"]).toContain('"fb_chat.send_serialize"');
+    // ts-ser.ts jsEncoders + direct-ser hasNul/directEncoders keyed by name.
+    expect(files["ts-ser.ts"]).toContain('"chat.send": encodeChatSendPayload as JsEncoder');
+    expect(files["direct-ser.ts"]).toContain('"chat.send": hasNulChatSend');
+    expect(files["direct-ser.ts"]).toContain('"chat.send": encodeChatSend');
+    // registry maps keyed by name.
+    expect(files["registry.ts"]).toContain('"chat.send":');
     // rust glue: valid fn identifier + exact C symbol via #[export_name].
     expect(files["rust/src/transcode/generated.rs"]).toContain(
       '#[export_name = "fb_chat.send_serialize"]',

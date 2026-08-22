@@ -202,12 +202,12 @@ export function emitDirectSer(m: Model, ctx: EmitContext = {}): string {
   lines.push(
     "export const hasNulEncoders: Partial<Record<AnyEventName, (o: unknown) => boolean>> = {",
   );
-  for (const ev of directEvents) lines.push(`  ${ev.name}: hasNul${pascal(ev.name)},`);
+  for (const ev of directEvents) lines.push(`  ${JSON.stringify(ev.name)}: hasNul${pascal(ev.name)},`);
   lines.push("};");
   lines.push("");
 
   lines.push("export const directSymbolNames: Partial<Record<AnyEventName, string>> = {");
-  for (const ev of directEvents) lines.push(`  ${ev.name}: ${JSON.stringify(directSymbol(ev))},`);
+  for (const ev of directEvents) lines.push(`  ${JSON.stringify(ev.name)}: ${JSON.stringify(directSymbol(ev))},`);
   lines.push("};");
   lines.push("");
   lines.push(
@@ -215,7 +215,7 @@ export function emitDirectSer(m: Model, ctx: EmitContext = {}): string {
   );
   lines.push("");
   lines.push("export const directEncoders: Partial<Record<AnyEventName, DirectEncoder>> = {");
-  for (const ev of directEvents) lines.push(`  ${ev.name}: encode${pascal(ev.name)},`);
+  for (const ev of directEvents) lines.push(`  ${JSON.stringify(ev.name)}: encode${pascal(ev.name)},`);
   lines.push("};");
   lines.push("");
 

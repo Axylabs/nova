@@ -72,17 +72,17 @@ export function emitRegistry(m: Model, fingerprint: number, ctx: EmitContext = {
   if (userMode) lines.push(...emitLocalTypes(m, neededTables, appEvents, controlEvents));
   lines.push("export const eventNameToId: Record<EventName, number> = {");
   for (const ev of appEvents)
-    lines.push(`  ${ev.name}: ${eventId(ev.name)}, // fnv1a32("${ev.name}")`);
+    lines.push(`  ${JSON.stringify(ev.name)}: ${eventId(ev.name)}, // fnv1a32("${ev.name}")`);
   lines.push("};");
   lines.push("");
   lines.push("export const controlEventNameToId: Record<ControlEventName, number> = {");
   for (const ev of controlEvents)
-    lines.push(`  ${ev.name}: ${eventId(ev.name)}, // fnv1a32("${ev.name}")`);
+    lines.push(`  ${JSON.stringify(ev.name)}: ${eventId(ev.name)}, // fnv1a32("${ev.name}")`);
   lines.push("};");
   lines.push("");
   lines.push("/** merged app + control registry (used by encodeToScratch / JS encoder). */");
   lines.push("export const anyEventNameToId: Record<string, number> = {");
-  for (const ev of m.events) lines.push(`  ${ev.name}: ${eventId(ev.name)},`);
+  for (const ev of m.events) lines.push(`  ${JSON.stringify(ev.name)}: ${eventId(ev.name)},`);
   lines.push("};");
   lines.push("");
   lines.push("export const idToEventName: Record<number, EventName> = {");

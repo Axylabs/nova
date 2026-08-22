@@ -122,7 +122,7 @@ export function emitTsSer(m: Model, ctx: EmitContext = {}): string {
   lines.push("");
   lines.push("export const jsEncoders: Record<string, JsEncoder> = {");
   for (const ev of m.events)
-    lines.push(`  ${ev.name}: encode${pascal(ev.name)}Payload as JsEncoder,`);
+    lines.push(`  ${JSON.stringify(ev.name)}: encode${pascal(ev.name)}Payload as JsEncoder,`);
   lines.push("};");
   lines.push("");
   lines.push("/** Encode a payload (app or control event) → size-prefixed FlatBuffer. */");
