@@ -54,7 +54,7 @@ export function assembleBindings<
     wireVersion: parts.wireVersion,
     wireHeaderLen: parts.wireHeaderLen,
     schemaFingerprint: parts.schemaFingerprint,
-    subjectPrefix: opts.subjectPrefix,
+    ...(opts.subjectPrefix !== undefined ? { subjectPrefix: opts.subjectPrefix } : {}),
     ffiMode: opts.ffiMode ?? "optional",
     events: schema.events,
     controlEvents,

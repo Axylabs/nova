@@ -47,8 +47,8 @@ export async function checkUpgrade(
     topics: new Set(),
     groups: new Set(authMeta?.groups ?? []),
     id,
-    userId: authMeta?.userId,
-    meta: authMeta?.meta,
+    ...(authMeta?.userId !== undefined ? { userId: authMeta.userId } : {}),
+    ...(authMeta?.meta !== undefined ? { meta: authMeta.meta } : {}),
     connectedAt: Date.now(),
   };
   // bun-types requires the WebSocketData options arg when Data != undefined

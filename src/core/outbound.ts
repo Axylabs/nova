@@ -4,10 +4,10 @@
  * `decide()` result; `doSend` is the single accounting point.
  */
 import type { ServerWebSocket } from "bun";
+import type { ControlEventName, ControlEvents } from "../schema";
 import { decide } from "./backpressure";
 import { RingBuffer } from "./ring";
 import type { ServerState, WsData } from "./state";
-import type { ControlEventName, ControlEvents } from "../schema";
 
 /** Actual socket write + counters (single accounting point). */
 export function doSend(state: ServerState, ws: ServerWebSocket<WsData>, frame: Uint8Array): void {
@@ -23,7 +23,11 @@ export function doSend(state: ServerState, ws: ServerWebSocket<WsData>, frame: U
  * replaced by a bounded queue (drop-oldest) / skip (drop-newest) / close
  * (disconnect).
  */
-export function sendFrame(state: ServerState, ws: ServerWebSocket<WsData>, frame: Uint8Array): void {
+export function sendFrame(
+  state: ServerState,
+  ws: ServerWebSocket<WsData>,
+  frame: Uint8Array,
+): void {
   const bp = state.bp;
   if (!bp) {
     doSend(state, ws, frame);
@@ -43,7 +47,11 @@ export function sendFrame(state: ServerState, ws: ServerWebSocket<WsData>, frame
       return;
     case "enqueue": {
       // RingBuffer: O(1) push + drop-from-head (no array shift() memmove).
-      const q = (ws.data.queue ??= new RingBuffer<Uint8Array>());
+      let q = ws.data.queue;
+      if (q === undefined) {
+        q = new RingBuffer<Uint8Array>();
+        ws.data.queue = q;
+      }
       q.push(frame.slice()); // owned copy for the queue
       for (let i = 0; i < d.dropHead; i++) {
         q.shift();

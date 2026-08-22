@@ -28,8 +28,8 @@
  * so tests can fake NATS entirely (no server needed in CI).
  */
 import { connect, type NatsConnection } from "nats";
-import type { Bindings } from "../bindings/types";
 import { defaultBindings } from "../bindings/default";
+import type { Bindings } from "../bindings/types";
 import { createSubjectBuilder, type SubjectBuilder } from "./subjects";
 
 export type NatsBridgeStatus = "connected" | "connecting" | "closed";
@@ -159,7 +159,7 @@ function createRealTransport(opts: NatsBridgeOptions): NatsTransport {
     try {
       const conn = await connect({
         servers: opts.servers ?? ["nats://localhost:4222"],
-        token: opts.token,
+        ...(opts.token !== undefined ? { token: opts.token } : {}),
         timeout: opts.connectTimeout ?? 5000,
         reconnect: opts.reconnect ?? true,
         maxReconnectAttempts: -1,
@@ -259,7 +259,9 @@ export function createNatsBridge(
 
   const unsubs: Array<() => void> = [];
   if (opts.inbound) {
-    const subjectsList = opts.inboundSubjects?.length ? opts.inboundSubjects : [subjects.inboundPrefix()];
+    const subjectsList = opts.inboundSubjects?.length
+      ? opts.inboundSubjects
+      : [subjects.inboundPrefix()];
     for (const subject of subjectsList) unsubs.push(subscribeInbound(subject));
   }
 

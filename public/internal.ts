@@ -10,6 +10,7 @@
  *   - `pooledByteBuffer` — pooled flatbuffers.ByteBuffer used by the generated
  *     registry's decoders.
  */
-export { encodeUtf8Into, ensureCapacity, utf8Len } from "../src/native/codec";
+
 export { checkInt64, setInt64GuardMode } from "../src/core/int64-guard";
+export { encodeUtf8Into, ensureCapacity, utf8Len } from "../src/native/codec";
 export { pooledByteBuffer } from "../src/transport/byte-buffer-pool";

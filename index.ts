@@ -22,49 +22,41 @@
  * The README (and docs/publishing.md) covers consuming this from an npm
  * package: `bun add ignex-nova`, then use the subpaths above.
  */
-export { createServer } from "./public/server";
-export type {
-  IgnServer,
-  ClientInfo,
-  IgnServerOptions,
-  IgnBackpressureOptions,
-  BackpressurePolicy,
-  WsData,
-  ClientMeta,
-  AuthResult,
-  MetricsSnapshot,
-  Int64GuardMode,
-} from "./public/server";
-// events layer types (the runtime singleton API is `ignex-nova/events`)
-export type {
-  EventsHub,
-  EventsOptions,
-  EventsClusterOptions,
-  EventsMetricsSnapshot,
-  EventClient,
-  ClientData,
-  ClientGroup,
-  UserGroup,
-  EventContext,
-  EventHandler,
-  ServerEventHandler,
-  EmitTarget,
-  EmitTargetKind,
-  RemoteClient,
-  ClusterTransport,
-  ClusterStateStore,
-  RedisConnectionOptions,
-} from "./public/server";
 
-export { createClient } from "./public/client";
 export type {
+  AssembleOptions,
+  Bindings,
+  BindingsParts,
+  ControlEventNameOf,
+  ControlEventsOf,
+  DefaultBindings,
+  DirectCall,
+  DirectEncoder,
+  DirectTables,
+  EventNameOf,
+  EventsOf,
+} from "./public/bindings";
+export { assembleBindings, defaultBindings } from "./public/bindings";
+export type {
+  ClientStatus,
   IgnClient,
   IgnClientOptions,
   IgnReconnectOptions,
-  ClientStatus,
 } from "./public/client";
 
-export { createNatsBridge, createSubjectBuilder } from "./public/nats";
+export { createClient } from "./public/client";
+export type { GeneratedBindings, GenerateOptions, SchemaRegistry } from "./public/generate";
+// ── generic bindings (ANY schema) ──────────────────────────────────────────
+export { generateBindings } from "./public/generate";
+// runtime helpers used by generated code (also exported via `ignex-nova/internal`)
+export {
+  checkInt64,
+  encodeUtf8Into,
+  ensureCapacity,
+  pooledByteBuffer,
+  setInt64GuardMode,
+  utf8Len,
+} from "./public/internal";
 export type {
   NatsBridge,
   NatsBridgeOptions,
@@ -73,36 +65,45 @@ export type {
   NatsTransport,
   SubjectBuilder,
 } from "./public/nats";
-
-// ── generic bindings (ANY schema) ──────────────────────────────────────────
-export { generateBindings } from "./public/generate";
-export type { SchemaRegistry, GenerateOptions, GeneratedBindings } from "./public/generate";
-
-export { assembleBindings, defaultBindings } from "./public/bindings";
+export { createNatsBridge, createSubjectBuilder } from "./public/nats";
+// events layer types (the runtime singleton API is `ignex-nova/events`)
 export type {
-  Bindings,
-  BindingsParts,
-  AssembleOptions,
-  DirectTables,
-  DirectCall,
-  DirectEncoder,
-  EventNameOf,
-  ControlEventNameOf,
-  EventsOf,
-  ControlEventsOf,
-  DefaultBindings,
-} from "./public/bindings";
-
-// runtime helpers used by generated code (also exported via `ignex-nova/internal`)
-export { encodeUtf8Into, ensureCapacity, utf8Len } from "./public/internal";
-export { checkInt64, setInt64GuardMode, pooledByteBuffer } from "./public/internal";
+  AuthResult,
+  BackpressurePolicy,
+  ClientData,
+  ClientGroup,
+  ClientInfo,
+  ClientMeta,
+  ClusterStateStore,
+  ClusterTransport,
+  EmitTarget,
+  EmitTargetKind,
+  EventClient,
+  EventContext,
+  EventHandler,
+  EventsClusterOptions,
+  EventsHub,
+  EventsMetricsSnapshot,
+  EventsOptions,
+  IgnBackpressureOptions,
+  IgnServer,
+  IgnServerOptions,
+  Int64GuardMode,
+  MetricsSnapshot,
+  RedisConnectionOptions,
+  RemoteClient,
+  ServerEventHandler,
+  UserGroup,
+  WsData,
+} from "./public/server";
+export { createServer } from "./public/server";
 
 // Plain-object payload types consumers type against (e.g. `Events["quote"]`).
 // Import as types only — the runtime `events` registry is transport-internal.
 export type {
-  Events,
-  EventName,
   AnyEventName,
-  ControlEvents,
   ControlEventName,
+  ControlEvents,
+  EventName,
+  Events,
 } from "./src/schema";

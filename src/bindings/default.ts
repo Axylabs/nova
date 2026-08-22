@@ -7,29 +7,30 @@
  * For your own schema, see `generateBindings` (public/generate.ts) —
  * `defaultBindings` is just the first, built-in instance of the same contract.
  */
-import { events, controlEvents } from "../schema";
+
 import {
-  WIRE_VERSION,
-  WIRE_HEADER_LEN,
-  SCHEMA_FINGERPRINT,
-  eventNameToId,
-  controlEventNameToId,
+  directEncoders,
+  directSelfTest,
+  directSymbolNames,
+  directSymbols,
+  hasNulEncoders,
+} from "../generated/direct-ser";
+import {
   anyEventNameToId,
-  idToEventName,
-  idToAnyEventName,
-  readFrameHeader,
-  isControlId,
-  decodePayload,
+  controlEventNameToId,
   decodeFrame,
+  decodePayload,
+  eventNameToId,
+  idToAnyEventName,
+  idToEventName,
+  isControlId,
+  readFrameHeader,
+  SCHEMA_FINGERPRINT,
+  WIRE_HEADER_LEN,
+  WIRE_VERSION,
 } from "../generated/registry";
 import { encodeEventFrame } from "../generated/ts-ser";
-import {
-  directSymbols,
-  directSymbolNames,
-  directEncoders,
-  hasNulEncoders,
-  directSelfTest,
-} from "../generated/direct-ser";
+import { controlEvents, events } from "../schema";
 import { assembleBindings } from "./assemble";
 
 // NOTE: no explicit `: Bindings` annotation on purpose — the concrete

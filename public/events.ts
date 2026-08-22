@@ -24,6 +24,13 @@
  * The events layer is opt-in (`createServer({ events })`); without it there is
  * zero overhead and the singleton throws a descriptive error on use.
  */
+
+export {
+  createMemoryStateStore,
+  createNatsClusterTransport,
+  createRedisClusterTransport,
+  createRedisStateStore,
+} from "../src/events/cluster";
 export {
   bindEvents,
   emit,
@@ -38,16 +45,10 @@ export {
   offServerEvent,
   on,
   onAny,
-  onServerEvent,
   once,
+  onServerEvent,
   unbindEvents,
 } from "../src/events/global";
-export {
-  createMemoryStateStore,
-  createNatsClusterTransport,
-  createRedisClusterTransport,
-  createRedisStateStore,
-} from "../src/events/cluster";
 export type {
   ClientData,
   ClientGroup,
@@ -58,11 +59,11 @@ export type {
   EventClient,
   EventContext,
   EventHandler,
+  EventSource,
   EventsClusterOptions,
   EventsHub,
   EventsMetricsSnapshot,
   EventsOptions,
-  EventSource,
   RedisConnectionOptions,
   RemoteClient,
   ServerEventHandler,

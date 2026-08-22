@@ -3,8 +3,14 @@
  * drives the state machine. `connect` is passed in by the composition root so
  * the timer can re-establish the socket.
  */
-import { setStatus, type ClientState, type IgnClientOptions, type IgnReconnectOptions } from "./client-state";
+
 import type { Bindings } from "../bindings/types";
+import {
+  type ClientState,
+  type IgnClientOptions,
+  type IgnReconnectOptions,
+  setStatus,
+} from "./client-state";
 
 /** Resolve the effective reconnect options (defaults applied). */
 export function reconnectOpts(opts: IgnClientOptions<Bindings>): IgnReconnectOptions | null {

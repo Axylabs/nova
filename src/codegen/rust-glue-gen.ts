@@ -1,7 +1,7 @@
-import type { EventDef, FieldDef, Model } from "./schema-model";
-import { isDirectableEvent, toSnake } from "./schema-model";
 import { WIRE_HEADER_LEN, WIRE_VERSION } from "./constants";
 import { eventId } from "./hash";
+import type { EventDef, FieldDef, Model } from "./schema-model";
+import { isDirectableEvent, toSnake } from "./schema-model";
 
 function rustTypeOf(f: FieldDef): string {
   switch (f.kind) {
@@ -33,7 +33,9 @@ function rustTypeOf(f: FieldDef): string {
 }
 
 function serdeAttr(f: FieldDef): string {
-  return f.kind === "int64" ? '#[serde(default, deserialize_with = "de_i64")]' : "#[serde(default)]";
+  return f.kind === "int64"
+    ? '#[serde(default, deserialize_with = "de_i64")]'
+    : "#[serde(default)]";
 }
 
 /** Statements that build any needed offsets before `Xxx::create(...)`. */
@@ -97,9 +99,12 @@ function emitJsonStruct(f: FieldDef): string {
   return `    ${serdeAttr(f)}\n    pub ${f.fbName}: ${ty},`;
 }
 
-function emitBuildFn(m: Model, t: { name: string; fields: FieldDef[] }): string {
+function emitBuildFn(_m: Model, t: { name: string; fields: FieldDef[] }): string {
   const snake = toSnake(t.name);
-  const exprs = t.fields.map(buildFieldExprs).filter((s) => s.length > 0).join("\n    ");
+  const exprs = t.fields
+    .map(buildFieldExprs)
+    .filter((s) => s.length > 0)
+    .join("\n    ");
   const args = t.fields.map(argsExpr).join("\n        ");
   const lines = [
     `pub fn build_${snake}<'a>(fbb: &mut flatbuffers::FlatBufferBuilder<'a>, j: &${t.name}Json) -> flatbuffers::WIPOffset<backend::${t.name}<'a>> {`,
@@ -113,7 +118,7 @@ function emitBuildFn(m: Model, t: { name: string; fields: FieldDef[] }): string 
   return lines.join("\n");
 }
 
-function emitSerializeFn(m: Model, ev: { name: string; tableName: string }): string {
+function emitSerializeFn(_m: Model, ev: { name: string; tableName: string }): string {
   const snake = toSnake(ev.name);
   const lines = [
     `pub fn serialize_${snake}(json: &[u8], out: &mut [u8]) -> Result<usize, TranscodeError> {`,
@@ -218,7 +223,14 @@ function directArgAssign(f: FieldDef): string {
 
 /** Packed-vector readers: decode a JS-packed binary blob into a FlatBuffer vector. */
 function isVectorKind(kind: string): boolean {
-  return ["vector-table", "vector-string", "vector-double", "vector-int64", "vector-bool", "vector-enum"].includes(kind);
+  return [
+    "vector-table",
+    "vector-string",
+    "vector-double",
+    "vector-int64",
+    "vector-bool",
+    "vector-enum",
+  ].includes(kind);
 }
 
 function emitPackedElemRead(ef: FieldDef): string {
@@ -266,10 +278,14 @@ function emitPackedReader(m: Model, parent: string, f: FieldDef): string {
     lines.push(`    let b = unsafe { std::slice::from_raw_parts(ptr, len) };`);
     lines.push(`    let mut off = 0usize;`);
     lines.push(`    let count = read_u32(b, &mut off) as usize;`);
-    lines.push(`    let mut offsets: Vec<flatbuffers::WIPOffset<backend::${f.tableName}<'a>>> = Vec::with_capacity(count);`);
+    lines.push(
+      `    let mut offsets: Vec<flatbuffers::WIPOffset<backend::${f.tableName}<'a>>> = Vec::with_capacity(count);`,
+    );
     lines.push(`    for _ in 0..count {`);
     for (const ef of elem.fields) lines.push(`        ${emitPackedElemRead(ef)}`);
-    lines.push(`        let item = backend::${f.tableName}::create(fbb, &backend::${f.tableName}Args {`);
+    lines.push(
+      `        let item = backend::${f.tableName}::create(fbb, &backend::${f.tableName}Args {`,
+    );
     for (const ef of elem.fields) lines.push(`            ${emitPackedElemAssign(ef)}`);
     lines.push(`            ..Default::default()`);
     lines.push(`        });`);
@@ -279,15 +295,19 @@ function emitPackedReader(m: Model, parent: string, f: FieldDef): string {
     lines.push(`}`);
     return lines.join("\n");
   }
-  const elemTy = ({
-    "vector-double": "f64",
-    "vector-int64": "i64",
-    "vector-bool": "bool",
-    "vector-string": "flatbuffers::ForwardsUOffset<&'a str>",
-    "vector-enum": `backend::${f.enumName}`,
-  } as Record<string, string>)[f.kind]!;
+  const elemTy = (
+    {
+      "vector-double": "f64",
+      "vector-int64": "i64",
+      "vector-bool": "bool",
+      "vector-string": "flatbuffers::ForwardsUOffset<&'a str>",
+      "vector-enum": `backend::${f.enumName}`,
+    } as Record<string, string>
+  )[f.kind]!;
   const vecInner = f.kind === "vector-string" ? "flatbuffers::WIPOffset<&'a str>" : elemTy;
-  lines.push(`fn ${name}<'a>(fbb: &mut flatbuffers::FlatBufferBuilder<'a>, ptr: *const u8, len: usize) -> Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, ${elemTy}>>> {`);
+  lines.push(
+    `fn ${name}<'a>(fbb: &mut flatbuffers::FlatBufferBuilder<'a>, ptr: *const u8, len: usize) -> Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, ${elemTy}>>> {`,
+  );
   lines.push(`    if ptr.is_null() || len == 0 { return None; }`);
   lines.push(`    let b = unsafe { std::slice::from_raw_parts(ptr, len) };`);
   lines.push(`    let mut off = 0usize;`);
@@ -298,8 +318,11 @@ function emitPackedReader(m: Model, parent: string, f: FieldDef): string {
   else if (f.kind === "vector-int64") lines.push(`        vals.push(read_i64(b, &mut off));`);
   else if (f.kind === "vector-bool") lines.push(`        vals.push(b[off] != 0); off += 1;`);
   else if (f.kind === "vector-string")
-    lines.push(`        let l = read_u32(b, &mut off) as usize; let s = std::str::from_utf8(&b[off..off + l]).unwrap_or(""); off += l; vals.push(fbb.create_string(s));`);
-  else if (f.kind === "vector-enum") lines.push(`        vals.push(backend::${f.enumName}(read_u32(b, &mut off) as i32));`);
+    lines.push(
+      `        let l = read_u32(b, &mut off) as usize; let s = std::str::from_utf8(&b[off..off + l]).unwrap_or(""); off += l; vals.push(fbb.create_string(s));`,
+    );
+  else if (f.kind === "vector-enum")
+    lines.push(`        vals.push(backend::${f.enumName}(read_u32(b, &mut off) as i32));`);
   lines.push(`    }`);
   lines.push(`    Some(fbb.create_vector(&vals))`);
   lines.push(`}`);
@@ -311,7 +334,8 @@ function emitPackedReaders(m: Model): string[] {
   const vectorFields: { parent: string; f: FieldDef }[] = [];
   for (const ev of directEvents) {
     const table = m.tables.find((t) => t.name === ev.tableName)!;
-    for (const f of table.fields) if (isVectorKind(f.kind)) vectorFields.push({ parent: table.name, f });
+    for (const f of table.fields)
+      if (isVectorKind(f.kind)) vectorFields.push({ parent: table.name, f });
   }
   if (vectorFields.length === 0) return [];
   const lines: string[] = [
@@ -345,8 +369,14 @@ function emitDirectFn(m: Model, ev: EventDef): string {
   const id = eventId(ev.name);
   const snake = toSnake(ev.name);
   const decls = table.fields.map(directArgDecl).join("\n    ");
-  const decodes = table.fields.map(directDecodeLines).filter((s) => s.length > 0).join("\n        ");
-  const builds = table.fields.map((f) => directBuildLines(f, table.name)).filter((s) => s.length > 0).join("\n            ");
+  const decodes = table.fields
+    .map(directDecodeLines)
+    .filter((s) => s.length > 0)
+    .join("\n        ");
+  const builds = table.fields
+    .map((f) => directBuildLines(f, table.name))
+    .filter((s) => s.length > 0)
+    .join("\n            ");
   const assigns = table.fields.map(directArgAssign).join("\n                ");
   return [
     `#[no_mangle]`,
@@ -413,7 +443,9 @@ export function emitRustGlue(m: Model, fingerprint: number): string {
   lines.push("use crate::generated::backend;");
   lines.push("");
   lines.push(`pub const WIRE_VERSION: u8 = ${WIRE_VERSION};`);
-  lines.push(`pub const WIRE_HEADER_LEN: usize = ${WIRE_HEADER_LEN}; // [version:1][event_id:u32 LE]`);
+  lines.push(
+    `pub const WIRE_HEADER_LEN: usize = ${WIRE_HEADER_LEN}; // [version:1][event_id:u32 LE]`,
+  );
   lines.push(`pub const SCHEMA_FINGERPRINT: u64 = ${fingerprint}; // fnv1a32(canonical model)`);
   lines.push("");
   lines.push("thread_local! {");
@@ -423,13 +455,15 @@ export function emitRustGlue(m: Model, fingerprint: number): string {
   lines.push("");
   lines.push("fn copy_finished<T>(");
   lines.push("    out: &mut [u8],");
-  lines.push("    build: impl FnOnce(&mut flatbuffers::FlatBufferBuilder<'static>) -> flatbuffers::WIPOffset<T>,");
+  lines.push(
+    "    build: impl FnOnce(&mut flatbuffers::FlatBufferBuilder<'static>) -> flatbuffers::WIPOffset<T>,",
+  );
   lines.push(") -> Result<usize, TranscodeError> {");
   lines.push("    FBB.with(|cell| {");
   lines.push("        let mut fbb = cell.borrow_mut();");
   lines.push("        fbb.reset();");
   lines.push("        let root = build(&mut fbb);");
-  lines.push("        fbb.finish_size_prefixed(root, Some(\"IGNX\"));");
+  lines.push('        fbb.finish_size_prefixed(root, Some("IGNX"));');
   lines.push("        let data = fbb.finished_data();");
   lines.push("        if data.len() > out.len() {");
   lines.push("            return Ok(data.len());");
@@ -495,7 +529,9 @@ export function emitRustGlue(m: Model, fingerprint: number): string {
     lines.push("");
   }
 
-  lines.push("pub fn serialize_event(event_id: u32, json: &[u8], out: &mut [u8]) -> Result<usize, TranscodeError> {");
+  lines.push(
+    "pub fn serialize_event(event_id: u32, json: &[u8], out: &mut [u8]) -> Result<usize, TranscodeError> {",
+  );
   lines.push("    match event_id {");
   m.events.forEach((ev) => {
     lines.push(`        ${eventId(ev.name)} => serialize_${toSnake(ev.name)}(json, out),`);

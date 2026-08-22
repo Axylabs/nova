@@ -9,7 +9,7 @@
  * a TypeBox schema; `Events[K]` is the plain-object type devs see on both the
  * server (publish) and the FE (on) — no FlatBuffer API anywhere in sight.
  */
-import { Type, type Static } from "@sinclair/typebox";
+import { type Static, Type } from "@sinclair/typebox";
 
 // ── Enums (union of string literals → FlatBuffer enum) ───────────────
 export const Side = Type.Union([Type.Literal("buy"), Type.Literal("sell")]);
@@ -182,7 +182,10 @@ export const JoinGroup = Type.Object({ group: Type.String() }, { additionalPrope
 
 export const LeaveGroup = Type.Object({ group: Type.String() }, { additionalProperties: false });
 
-export const SnapshotRequest = Type.Object({ topic: Type.String() }, { additionalProperties: false });
+export const SnapshotRequest = Type.Object(
+  { topic: Type.String() },
+  { additionalProperties: false },
+);
 
 export const Ping = Type.Object({ ts: Type.Integer() }, { additionalProperties: false });
 

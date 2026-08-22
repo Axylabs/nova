@@ -1,3 +1,4 @@
+// oxlint-disable no-loss-of-precision -- deliberate: tests the int64 loss guard
 /**
  * Exact int64 (Type.BigInt) + loss-guard tests (Phase 6):
  *   - `bigint` fields round-trip EXACTLY beyond ±2^53-1 (both FFI and JS paths)
@@ -5,14 +6,14 @@
  *     (`"throw"` / `"warn"` / `"off"` modes; `"off"` is the default)
  *   - bigint-annotated fields never trip the guard
  */
-import { describe, expect, test, afterAll } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
 import { createServer } from "../public/server";
-import { encodeEvent } from "../src/transport/transport";
+import { setInt64GuardMode } from "../src/core/int64-guard";
 import { decodeFrame } from "../src/generated/registry";
 import { encodeEventFrame } from "../src/generated/ts-ser";
-import { setInt64GuardMode } from "../src/core/int64-guard";
-import { bigVal, decodeWsFrame, quote } from "./helpers";
 import type { Events } from "../src/schema";
+import { encodeEvent } from "../src/transport/transport";
+import { bigVal, decodeWsFrame, quote } from "./helpers";
 
 describe("exact int64 (Type.BigInt)", () => {
   test("values beyond 2^53 round-trip exactly (FFI path)", () => {
@@ -25,8 +26,12 @@ describe("exact int64 (Type.BigInt)", () => {
   test("full int64 range (i64::MAX / i64::MIN) round-trips", () => {
     const max = bigVal({ id: "max", seq: 9223372036854775807n, when: 1 });
     const min = bigVal({ id: "min", seq: -9223372036854775808n, when: 2 });
-    expect((decodeFrame(encodeEvent("bigVal", max))?.payload as Events["bigVal"]).seq).toBe(9223372036854775807n);
-    expect((decodeFrame(encodeEvent("bigVal", min))?.payload as Events["bigVal"]).seq).toBe(-9223372036854775808n);
+    expect((decodeFrame(encodeEvent("bigVal", max))!.payload as Events["bigVal"]).seq).toBe(
+      9223372036854775807n,
+    );
+    expect((decodeFrame(encodeEvent("bigVal", min))!.payload as Events["bigVal"]).seq).toBe(
+      -9223372036854775808n,
+    );
   });
 
   test("the JS encoder (browser path) also preserves bigint", () => {
@@ -57,9 +62,12 @@ describe("exact int64 (Type.BigInt)", () => {
 });
 
 describe("loss guard (plain number int64)", () => {
-  // oxlint-disable-next-line no-loss-of-precision -- deliberate: the guard exists to catch this
-  const bad = (): Events["quote"] => quote("AAPL", { bid: 1, ask: 2, bidSize: 9007199254740993, askSize: 3, ts: 4 });
-  const good = (): Events["quote"] => quote("AAPL", { bid: 1, ask: 2, bidSize: 9007199254740991, askSize: 3, ts: 4 });
+  // eslint-disable-next-line no-loss-of-precision -- deliberate: the guard exists to catch this
+  const bad = (): Events["quote"] =>
+    // biome-ignore lint/correctness/noPrecisionLoss: deliberate — the loss guard exists to catch this
+    quote("AAPL", { bid: 1, ask: 2, bidSize: 9007199254740993, askSize: 3, ts: 4 });
+  const good = (): Events["quote"] =>
+    quote("AAPL", { bid: 1, ask: 2, bidSize: 9007199254740991, askSize: 3, ts: 4 });
 
   test('"off" (default) does not throw', () => {
     setInt64GuardMode("off");

@@ -19,13 +19,15 @@ const port = Number(process.env.PORT ?? 3000);
 const natsUrl = process.env.NATS_URL;
 const server = createServer({
   port,
-  nats: natsUrl ? { servers: [natsUrl], inbound: true } : undefined,
+  ...(natsUrl ? { nats: { servers: [natsUrl], inbound: true } } : {}),
   fetch: (req) => serveStatic(req),
 });
 
 console.log(`ignex demo: http://localhost:${port}/  (ws: ws://localhost:${port}/ws)`);
 if (natsUrl) {
-  console.log(`ignex demo: NATS bridge → ${natsUrl} (subjects: ignex.broadcast.* / ignex.topic.* / ignex.group.*; inbound: ignex.inbound.>)`);
+  console.log(
+    `ignex demo: NATS bridge → ${natsUrl} (subjects: ignex.broadcast.* / ignex.topic.* / ignex.group.*; inbound: ignex.inbound.>)`,
+  );
 }
 
 const CONTENT_TYPES: Record<string, string> = {
@@ -46,7 +48,9 @@ async function serveStatic(req: Request): Promise<Response> {
   const f = Bun.file(file);
   if (!(await f.exists())) return new Response("not found", { status: 404 });
   const ext = file.slice(file.lastIndexOf(".")).toLowerCase();
-  return new Response(f, { headers: { "content-type": CONTENT_TYPES[ext] ?? "application/octet-stream" } });
+  return new Response(f, {
+    headers: { "content-type": CONTENT_TYPES[ext] ?? "application/octet-stream" },
+  });
 }
 
 // Static page + pub/sub websocket share one port: /ws is upgraded by the

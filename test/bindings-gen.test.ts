@@ -10,17 +10,17 @@
  * used by the fingerprint guard test).
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, existsSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { Type, type Static, type TSchema } from "@sinclair/typebox";
-import { generateBindings, type GeneratedBindings } from "../public/generate";
-import { createServer } from "../public/server";
+import { type Static, type TSchema, Type } from "@sinclair/typebox";
 import { createClient } from "../public/client";
-import { createNatsBridge, type NatsTransport } from "../src/bridge/nats";
-import { bindFfi } from "../src/native/ffi";
+import { type GeneratedBindings, generateBindings } from "../public/generate";
+import { createServer } from "../public/server";
 import { defaultBindings } from "../src/bindings/default";
 import type { Bindings, EventsOf } from "../src/bindings/types";
+import { createNatsBridge, type NatsTransport } from "../src/bridge/nats";
 import { eventId } from "../src/codegen/hash";
+import { bindFfi } from "../src/native/ffi";
 import { waitFor } from "./helpers";
 
 // ── a user's custom schema ────────────────────────────────────────────────
@@ -45,9 +45,10 @@ const customSchema = {
   events: { chat: ChatMsg, telemetry: Telemetry, alert: Alert },
 };
 
-type MakeBindings = <E extends Record<string, TSchema>, C extends Record<string, TSchema>>(
-  schema: { events: E; controlEvents?: C },
-) => Omit<Bindings, "events" | "controlEvents"> & { events: E; controlEvents: C };
+type MakeBindings = <E extends Record<string, TSchema>, C extends Record<string, TSchema>>(schema: {
+  events: E;
+  controlEvents?: C;
+}) => Omit<Bindings, "events" | "controlEvents"> & { events: E; controlEvents: C };
 
 let genDir = "";
 let generated: GeneratedBindings | undefined;
@@ -127,7 +128,14 @@ describe("in-memory bindings (custom schema)", () => {
     const local = makeBindings!({ events: customSchema.events });
     type E = EventsOf<typeof local>;
     type Assert<T extends true> = T;
-    type Check = Assert<{ chat: Static<typeof ChatMsg>; telemetry: Static<typeof Telemetry> } extends Pick<E, "chat" | "telemetry"> ? true : false>;
+    type Check = Assert<
+      { chat: Static<typeof ChatMsg>; telemetry: Static<typeof Telemetry> } extends Pick<
+        E,
+        "chat" | "telemetry"
+      >
+        ? true
+        : false
+    >;
     const check: Check = true;
     void check;
   });
@@ -207,7 +215,10 @@ describe("NATS bridge with custom bindings", () => {
   test("inbound frames decode with the custom bindings + client events re-publish to {prefix}.inbound.<event>", async () => {
     const b = bindings!;
     const t = new FakeTransport();
-    const bridge = createNatsBridge({ inbound: true, bindings: b, bridgeClientEvents: true, subjectPrefix: "app" }, t);
+    const bridge = createNatsBridge(
+      { inbound: true, bindings: b, bridgeClientEvents: true, subjectPrefix: "app" },
+      t,
+    );
     const server = createServer({ port: 0, nats: bridge, bindings: b, inbound: ["chat"] as never });
     const url = `ws://localhost:${server.port}/ws`;
     const client = createClient(url, { bindings: b });
@@ -229,7 +240,10 @@ describe("NATS bridge with custom bindings", () => {
     // an external NATS publisher's frame (encoded with the custom bindings)
     // reaches clients — and is NOT re-bridged (no loop)
     const before = t.published.length;
-    t.emit("app.inbound.telemetry", b.encodeFrame("telemetry", { device: "d9", readings: [9], ok: true }));
+    t.emit(
+      "app.inbound.telemetry",
+      b.encodeFrame("telemetry", { device: "d9", readings: [9], ok: true }),
+    );
     await waitFor(() => clientGot.length === 1);
     expect(clientGot[0]).toEqual({ device: "d9", readings: [9], ok: true });
     expect(t.published.length).toBe(before);

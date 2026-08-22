@@ -12,23 +12,23 @@
  */
 import type { ServerWebSocket } from "bun";
 import type { Bindings, DefaultBindings, EventNameOf, EventsOf } from "../bindings/types";
-import { setInt64GuardMode } from "./int64-guard";
-import type { MetricsSnapshot } from "./metrics";
-import { checkUpgrade } from "./auth";
-import { drainSocket, sendControl, sendFrame } from "./outbound";
-import { handleMessage } from "./routing";
-import { joinRoom, leaveRoom, publishToRoom, roomTopics } from "./rooms";
-import {
-  activeGroups,
-  groupMembers as groupMemberIds,
-  joinGroup as addToGroup,
-  leaveGroup as removeFromGroup,
-  publishToGroup as publishToGroupState,
-} from "./groups";
-import { createServerState, type IgnServerOptions, type WsData } from "./state";
 import { createNatsBridge } from "../bridge/nats";
 import { createEventsHub, type EventsHubInternal } from "../events/hub";
 import type { EventsHub } from "../events/types";
+import { checkUpgrade } from "./auth";
+import {
+  activeGroups,
+  joinGroup as addToGroup,
+  groupMembers as groupMemberIds,
+  publishToGroup as publishToGroupState,
+  leaveGroup as removeFromGroup,
+} from "./groups";
+import { setInt64GuardMode } from "./int64-guard";
+import type { MetricsSnapshot } from "./metrics";
+import { drainSocket, sendControl, sendFrame } from "./outbound";
+import { joinRoom, leaveRoom, publishToRoom, roomTopics } from "./rooms";
+import { handleMessage } from "./routing";
+import { createServerState, type IgnServerOptions, type WsData } from "./state";
 
 /** A snapshot of an active client (from `getClient` / `getClients` / GET /clients). */
 export interface ClientInfo {
@@ -50,8 +50,8 @@ export interface ClientInfo {
 function toClientInfo(ws: ServerWebSocket<WsData>): ClientInfo {
   return {
     id: ws.data.id,
-    userId: ws.data.userId,
-    meta: ws.data.meta,
+    ...(ws.data.userId !== undefined ? { userId: ws.data.userId } : {}),
+    ...(ws.data.meta !== undefined ? { meta: ws.data.meta } : {}),
     groups: [...ws.data.groups],
     topics: [...ws.data.topics],
     connectedAt: ws.data.connectedAt,
@@ -67,7 +67,11 @@ export interface IgnServer<B extends Bindings = DefaultBindings> {
   /** Broadcast a typed event to every connected client (zero-alloc on the happy path). */
   publish<K extends EventNameOf<B>>(name: K, payload: EventsOf<B>[K]): void;
   /** Send a typed event to a single socket (zero-alloc on the happy path). */
-  publishTo<K extends EventNameOf<B>>(ws: ServerWebSocket<WsData>, name: K, payload: EventsOf<B>[K]): void;
+  publishTo<K extends EventNameOf<B>>(
+    ws: ServerWebSocket<WsData>,
+    name: K,
+    payload: EventsOf<B>[K],
+  ): void;
   /** Publish a typed event to every socket subscribed to `topic`. */
   publishToTopic<K extends EventNameOf<B>>(topic: string, name: K, payload: EventsOf<B>[K]): void;
   /** Send a typed event to a specific client by id. Returns false if that client is offline. */
@@ -102,27 +106,33 @@ export interface IgnServer<B extends Bindings = DefaultBindings> {
   /** Disconnect a client by id. Returns false if that client is offline. */
   disconnectClient(id: string): boolean;
   /** Register a handler for an inbound app event (must be in `options.inbound`). */
-  on<K extends EventNameOf<B>>(name: K, handler: (payload: EventsOf<B>[K], ws: ServerWebSocket<WsData>) => void): IgnServer<B>;
+  on<K extends EventNameOf<B>>(
+    name: K,
+    handler: (payload: EventsOf<B>[K], ws: ServerWebSocket<WsData>) => void,
+  ): IgnServer<B>;
   off<K extends EventNameOf<B>>(name: K): IgnServer<B>;
   /**
    * The events hub — present when `createServer({ events: {...} })` is used:
    * typed handlers (`server.events.on`), client records, groups, and the
    * cluster-aware emit surface.
    */
-  readonly events?: EventsHub<B>;
+  readonly events: EventsHub<B> | undefined;
   /** Graceful drain: stop accepting, wait up to `timeoutMs` for queues to flush. */
   drain(timeoutMs?: number): Promise<void>;
   stop(force?: boolean): void;
 }
 
-export function createServer<B extends Bindings = DefaultBindings>(options: IgnServerOptions<B>): IgnServer<B> {
+export function createServer<B extends Bindings = DefaultBindings>(
+  options: IgnServerOptions<B>,
+): IgnServer<B> {
   const state = createServerState(options);
   setInt64GuardMode(options.int64Guard ?? "off");
   const bindings = state.bindings;
 
   // NATS bridge (optional, best-effort — created eagerly, connects in the background)
   const natsOpt = options.nats;
-  if (natsOpt) state.bridge = "publish" in natsOpt ? natsOpt : createNatsBridge(natsOpt, undefined, bindings);
+  if (natsOpt)
+    state.bridge = "publish" in natsOpt ? natsOpt : createNatsBridge(natsOpt, undefined, bindings);
 
   // Encode once + broadcast to every connected client (NO bridge) — the shared
   // hot path for `publish` and NATS-inbound forwarding. Loop prevention: inbound
@@ -146,9 +156,9 @@ export function createServer<B extends Bindings = DefaultBindings>(options: IgnS
 
   const bun = Bun.serve<WsData>({
     port: options.port,
-    hostname: options.hostname,
+    ...(options.hostname !== undefined ? { hostname: options.hostname } : {}),
     idleTimeout: options.idleTimeout ?? 30,
-    tls: options.tls,
+    ...(options.tls !== undefined ? { tls: options.tls } : {}),
     fetch: (req, srv) => {
       const url = new URL(req.url);
       if (url.pathname === state.path) return checkUpgrade(state, req, srv);
@@ -304,7 +314,10 @@ export function createServer<B extends Bindings = DefaultBindings>(options: IgnS
       return true;
     },
     on(name, handler) {
-      state.inboundHandlers.set(name, handler as (payload: unknown, ws: ServerWebSocket<WsData>) => void);
+      state.inboundHandlers.set(
+        name,
+        handler as (payload: unknown, ws: ServerWebSocket<WsData>) => void,
+      );
       return api;
     },
     off(name) {
@@ -337,7 +350,7 @@ export function createServer<B extends Bindings = DefaultBindings>(options: IgnS
       state,
       server: api,
       bindings,
-      serverBridge: state.bridge,
+      ...(state.bridge !== undefined ? { serverBridge: state.bridge } : {}),
       options: options.events,
     });
     state.onConnect = (ws) => {

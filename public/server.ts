@@ -16,45 +16,46 @@
  *
  * Bun-only (bun:ffi + Bun.serve).
  */
-export { createServer, type IgnServer, type ClientInfo } from "../src/core/server";
+
 export type {
-  IgnServerOptions,
-  IgnBackpressureOptions,
-  BackpressurePolicy,
-  WsData,
-  ClientMeta,
-  AuthResult,
-} from "../src/core/state";
-export type { MetricsSnapshot } from "../src/core/metrics";
-export type { Int64GuardMode } from "../src/core/int64-guard";
-// NATS bridge — re-exported so `nats` options on `createServer` are typed
-// without a separate import (a standalone entrypoint is `ignex-nova/nats`).
-export { createNatsBridge } from "../src/bridge/nats";
-export type {
-  NatsBridgeOptions,
   NatsBridge,
+  NatsBridgeOptions,
   NatsBridgeStats,
   NatsBridgeStatus,
   NatsTransport,
 } from "../src/bridge/nats";
+// NATS bridge — re-exported so `nats` options on `createServer` are typed
+// without a separate import (a standalone entrypoint is `ignex-nova/nats`).
+export { createNatsBridge } from "../src/bridge/nats";
+export type { Int64GuardMode } from "../src/core/int64-guard";
+export type { MetricsSnapshot } from "../src/core/metrics";
+export { type ClientInfo, createServer, type IgnServer } from "../src/core/server";
+export type {
+  AuthResult,
+  BackpressurePolicy,
+  ClientMeta,
+  IgnBackpressureOptions,
+  IgnServerOptions,
+  WsData,
+} from "../src/core/state";
 // Events layer — re-exported so `createServer({ events })` is fully typed
 // without a separate import (the runtime API is `ignex-nova/events`).
 export type {
-  EventsHub,
-  EventsOptions,
-  EventsClusterOptions,
-  EventsMetricsSnapshot,
-  EventClient,
   ClientData,
   ClientGroup,
-  UserGroup,
-  EventContext,
-  EventHandler,
-  ServerEventHandler,
+  ClusterStateStore,
+  ClusterTransport,
   EmitTarget,
   EmitTargetKind,
-  RemoteClient,
-  ClusterTransport,
-  ClusterStateStore,
+  EventClient,
+  EventContext,
+  EventHandler,
+  EventsClusterOptions,
+  EventsHub,
+  EventsMetricsSnapshot,
+  EventsOptions,
   RedisConnectionOptions,
+  RemoteClient,
+  ServerEventHandler,
+  UserGroup,
 } from "../src/events/types";

@@ -41,4 +41,4 @@ client.on("nope", () => {});
 // @ts-expect-error — wrong payload shape is rejected
 server.publish("quote", { symbol: 42 });
 
-export { server, client };
+export { client, server };

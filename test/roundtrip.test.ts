@@ -4,10 +4,10 @@
  */
 import { describe, expect, test } from "bun:test";
 import { createServer } from "../public/server";
-import { encodeEvent } from "../src/transport/transport";
 import { decodeFrame, isControlId } from "../src/generated/registry";
-import { portfolio, quote, trade } from "./helpers";
 import type { Events } from "../src/schema";
+import { encodeEvent } from "../src/transport/transport";
+import { portfolio, quote, trade } from "./helpers";
 
 const quotePayload: Events["quote"] = quote("AAPL", {
   bid: 180.25,
@@ -49,7 +49,7 @@ describe("encode → decode round-trip", () => {
   test("missing optional fields decode to undefined, not garbage", () => {
     const noUpdatedBy: Events["portfolio"] = { ...portfolioPayload, updatedBy: undefined };
     const decoded = decodeFrame(encodeEvent("portfolio", noUpdatedBy));
-    expect((decoded?.payload as Events["portfolio"]).updatedBy).toBeUndefined();
+    expect((decoded!.payload as Events["portfolio"]).updatedBy).toBeUndefined();
   });
 });
 

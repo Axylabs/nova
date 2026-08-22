@@ -19,8 +19,9 @@
  * the historical singleton behavior — `encodeToScratch` / `encodeEvent` /
  * `getEncodeStats` remain re-exported for backwards compatibility.
  */
-import type { Bindings, DirectEncoder } from "../bindings/types";
+
 import { defaultBindings } from "../bindings/default";
+import type { Bindings, DirectEncoder } from "../bindings/types";
 import { createFfi, type FfiDl } from "../native/ffi";
 import { createScratch, MIN_CAP } from "./scratch";
 import { createStats } from "./stats";
@@ -35,7 +36,11 @@ export interface Transport {
   /** Owned copy (safe to hold) — used by tests/bench. One allocation. */
   encodeEvent(name: string, payload: unknown): Uint8Array;
   /** encode-path stats (direct vs json vs js). */
-  getEncodeStats(): { direct: Record<string, number>; json: Record<string, number>; js: Record<string, number> };
+  getEncodeStats(): {
+    direct: Record<string, number>;
+    json: Record<string, number>;
+    js: Record<string, number>;
+  };
 }
 
 /**
@@ -47,7 +52,7 @@ interface ResolvedDirect {
   /** generated zero-alloc encoder (absent for JSON-only events) */
   encoder?: DirectEncoder;
   /** resolved FFI symbol (undefined = symbol disabled → JSON fallback) */
-  call?: (...args: unknown[]) => number;
+  call: ((...args: unknown[]) => number) | undefined;
   /** per-event NUL pre-scan (absent when the event has no string fields) */
   hasNul?: (o: unknown) => boolean;
 }
@@ -72,14 +77,15 @@ export function createTransport(bindings: Bindings): Transport {
   function resolveDirect(name: string): ResolvedDirect {
     let r = resolvedDirect.get(name);
     if (r === undefined) {
-      r = {};
+      r = { call: undefined };
       const encoder = bindings.direct?.encoders[name];
       if (encoder) {
         r.encoder = encoder;
         const dl = getFfiDl();
         const symName = bindings.direct?.symbolNames[name];
         r.call = dl ? dl.raw[symName ?? ""] : undefined;
-        r.hasNul = bindings.direct?.hasNul[name];
+        const hasNul = bindings.direct?.hasNul[name];
+        if (hasNul !== undefined) r.hasNul = hasNul;
       }
       resolvedDirect.set(name, r);
     }
@@ -98,13 +104,17 @@ export function createTransport(bindings: Bindings): Transport {
         if (!guard) {
           // required mode — zero-alloc hot path, no try/catch
           scratch.grow(MIN_CAP);
-          const w = scratch.neededSize(name, encoder(r.call, payload, scratch.view), () => encoder(r.call!, payload, scratch.view));
+          const w = scratch.neededSize(name, encoder(r.call, payload, scratch.view), () =>
+            encoder(r.call!, payload, scratch.view),
+          );
           stats.bump(name, "direct");
           return scratch.view.subarray(0, w);
         }
         try {
           scratch.grow(MIN_CAP);
-          const w = scratch.neededSize(name, encoder(r.call, payload, scratch.view), () => encoder(r.call!, payload, scratch.view));
+          const w = scratch.neededSize(name, encoder(r.call, payload, scratch.view), () =>
+            encoder(r.call!, payload, scratch.view),
+          );
           stats.bump(name, "direct");
           return scratch.view.subarray(0, w);
         } catch {
@@ -123,7 +133,9 @@ export function createTransport(bindings: Bindings): Transport {
       const json = JSON.stringify(payload);
       const ffi2 = dl.bindings;
       scratch.grow(Math.max(MIN_CAP, json.length * 2 + 128));
-      const w = scratch.neededSize(name, ffi2.fb_serialize(id, json, scratch.view), () => ffi2.fb_serialize(id, json, scratch.view));
+      const w = scratch.neededSize(name, ffi2.fb_serialize(id, json, scratch.view), () =>
+        ffi2.fb_serialize(id, json, scratch.view),
+      );
       stats.bump(name, "json");
       return scratch.view.subarray(0, w);
     }
@@ -165,6 +177,10 @@ export function encodeEvent(name: string, payload: unknown): Uint8Array {
 }
 
 /** encode-path stats for the built-in registry (direct vs JSON). */
-export function getEncodeStats(): { direct: Record<string, number>; json: Record<string, number>; js: Record<string, number> } {
+export function getEncodeStats(): {
+  direct: Record<string, number>;
+  json: Record<string, number>;
+  js: Record<string, number>;
+} {
   return defaultTransport.getEncodeStats();
 }

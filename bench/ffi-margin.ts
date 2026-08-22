@@ -19,9 +19,14 @@ import { dlopen, type FFITypeOrString } from "bun:ffi";
 import { getAddonPath } from "../src/native/loader";
 import { measureNs } from "./measure";
 
-type RawFn = (...a: unknown[]) => number | bigint | void;
+type RawFn = (...a: unknown[]) => number | bigint | undefined;
 
-function bindRaw(path: string, symbol: string, args: readonly FFITypeOrString[], returns: FFITypeOrString): RawFn | null {
+function bindRaw(
+  path: string,
+  symbol: string,
+  args: readonly FFITypeOrString[],
+  returns: FFITypeOrString,
+): RawFn | null {
   try {
     const { symbols } = dlopen(path, {
       [symbol]: { args, returns },
@@ -57,9 +62,33 @@ const row = (label: string, ns: number) =>
   console.log(`  ${label.padEnd(42)} ${String(ns).padStart(6)} ns`);
 
 console.log("ffi margin (min-of-N ns/op):");
-if (noop) row("noop (bare trampoline floor)", measureNs(() => noop()));
-if (echoUsize) row("echo_usize (usize→BigInt return)", measureNs(() => echoUsize(7)));
-if (echoU64Fast) row("echo_usize (u64_fast return)", measureNs(() => echoU64Fast(7)));
-if (echoViewPair) row("echo_view (buffer+buffer_length pair)", measureNs(() => echoViewPair(view, view)));
-if (echoViewPtrLen) row("echo_view (ptr,usize explicit)", measureNs(() => echoViewPtrLen(view, view.byteLength)));
-if (echoCstr) row("echo_cstr (cstring ARG transcode)", measureNs(() => echoCstr("aapl")));
+if (noop)
+  row(
+    "noop (bare trampoline floor)",
+    measureNs(() => noop()),
+  );
+if (echoUsize)
+  row(
+    "echo_usize (usize→BigInt return)",
+    measureNs(() => echoUsize(7)),
+  );
+if (echoU64Fast)
+  row(
+    "echo_usize (u64_fast return)",
+    measureNs(() => echoU64Fast(7)),
+  );
+if (echoViewPair)
+  row(
+    "echo_view (buffer+buffer_length pair)",
+    measureNs(() => echoViewPair(view, view)),
+  );
+if (echoViewPtrLen)
+  row(
+    "echo_view (ptr,usize explicit)",
+    measureNs(() => echoViewPtrLen(view, view.byteLength)),
+  );
+if (echoCstr)
+  row(
+    "echo_cstr (cstring ARG transcode)",
+    measureNs(() => echoCstr("aapl")),
+  );

@@ -50,9 +50,9 @@ export interface EventClient {
   /** stable connection id (ws identity, unique per socket) */
   readonly id: string;
   /** identity this connection acts on behalf of (undefined = anonymous) */
-  readonly userId?: string;
+  readonly userId: string | undefined;
   /** arbitrary app metadata from `authenticate` (undefined if none) */
-  readonly meta?: Record<string, unknown>;
+  readonly meta: Record<string, unknown> | undefined;
   /** per-connection app state store (auto-cleared on disconnect) */
   readonly data: ClientData;
   /** server-side client groups this connection belongs to */
@@ -263,7 +263,10 @@ export interface EventsHub<B extends Bindings = DefaultBindings> {
   offAny(cb: (name: EventNameOf<B>, payload: unknown, ctx: EventContext<B>) => void): EventsHub<B>;
   /** server-side handlers for events from OTHER instances / the bridge */
   onServerEvent<K extends EventNameOf<B>>(name: K, handler: ServerEventHandler<B, K>): EventsHub<B>;
-  offServerEvent<K extends EventNameOf<B>>(name: K, handler?: ServerEventHandler<B, K>): EventsHub<B>;
+  offServerEvent<K extends EventNameOf<B>>(
+    name: K,
+    handler?: ServerEventHandler<B, K>,
+  ): EventsHub<B>;
   /** event names with at least one handler */
   events(): EventNameOf<B>[];
   listenerCount(name: EventNameOf<B>): number;
@@ -313,7 +316,13 @@ export interface EventsHub<B extends Bindings = DefaultBindings> {
 
   // ── lifecycle / observability ─────────────────────────────────────────
   metrics(): EventsMetricsSnapshot;
-  queueStats(): { pending: number; queued: number; processed: number; dropped: number; errors: number };
+  queueStats(): {
+    pending: number;
+    queued: number;
+    processed: number;
+    dropped: number;
+    errors: number;
+  };
   close(): Promise<void>;
 }
 

@@ -24,6 +24,7 @@
 import { createRequire } from "node:module";
 import type { Bindings } from "../bindings/types";
 import type { NatsBridge } from "../bridge/nats";
+import type { TaskQueue } from "./queue";
 import type {
   ClusterStateStore,
   ClusterTransport,
@@ -31,7 +32,6 @@ import type {
   RedisConnectionOptions,
   RemoteClient,
 } from "./types";
-import type { TaskQueue } from "./queue";
 
 // ── envelope ────────────────────────────────────────────────────────────────
 
@@ -57,7 +57,13 @@ export interface ClusterEnvelope {
   frame: Uint8Array;
 }
 
-export function encodeClusterMessage(origin: string, kind: ClusterKind, key: string, name: string, frame: Uint8Array): Uint8Array {
+export function encodeClusterMessage(
+  origin: string,
+  kind: ClusterKind,
+  key: string,
+  name: string,
+  frame: Uint8Array,
+): Uint8Array {
   const o = enc.encode(origin);
   const k = enc.encode(key);
   const n = enc.encode(name);
@@ -98,7 +104,13 @@ export function decodeClusterMessage(bytes: Uint8Array): ClusterEnvelope | null 
   if (!k) return null;
   const n = read(k.next);
   if (!n) return null;
-  return { origin: o.str, kind: CLUSTER_KINDS[kindId]!, key: k.str, name: n.str, frame: bytes.subarray(n.next) };
+  return {
+    origin: o.str,
+    kind: CLUSTER_KINDS[kindId]!,
+    key: k.str,
+    name: n.str,
+    frame: bytes.subarray(n.next),
+  };
 }
 
 // ── subjects ────────────────────────────────────────────────────────────────
@@ -114,7 +126,8 @@ export function createClusterSubjects(prefix: string): ClusterSubjects {
   const base = `${prefix}.cluster`;
   return {
     all: () => `${base}.>`,
-    event: (kind, key, name) => (key === undefined ? `${base}.${kind}.${name}` : `${base}.${kind}.${key}.${name}`),
+    event: (kind, key, name) =>
+      key === undefined ? `${base}.${kind}.${name}` : `${base}.${kind}.${key}.${name}`,
   };
 }
 
@@ -231,11 +244,18 @@ export function createClusterSync(opts: ClusterSyncOptions): ClusterSync {
     });
   };
 
-  const publishToCluster = (kind: ClusterKind, key: string, name: string, data: Uint8Array): void => {
+  const publishToCluster = (
+    kind: ClusterKind,
+    key: string,
+    name: string,
+    data: Uint8Array,
+  ): void => {
     if (closed) return;
     // exact subject (subscribe side uses the wildcard; the envelope carries routing)
     const subject =
-      kind === "presence" ? `${prefix}.cluster.presence` : subjects.event(kind as EmitTargetKind, key || undefined, name);
+      kind === "presence"
+        ? `${prefix}.cluster.presence`
+        : subjects.event(kind as EmitTargetKind, key || undefined, name);
     queue.enqueue(() => {
       if (!transport.connected) {
         errors++; // offline broker — frames dropped, visible in metrics
@@ -267,7 +287,12 @@ export function createClusterSync(opts: ClusterSyncOptions): ClusterSync {
     if (!msg) return;
     if (msg.t === "j") {
       if (msg.i === instanceId) return;
-      remote.set(msg.c, { clientId: msg.c, instanceId: msg.i, userId: msg.u, lastSeen: msg.at });
+      remote.set(msg.c, {
+        clientId: msg.c,
+        instanceId: msg.i,
+        ...(msg.u !== undefined ? { userId: msg.u } : {}),
+        lastSeen: msg.at,
+      });
       return;
     }
     if (msg.t === "l") {
@@ -292,7 +317,8 @@ export function createClusterSync(opts: ClusterSyncOptions): ClusterSync {
     announce({ t: "s", i: instanceId, at: Date.now() });
     if (stateStore) {
       store(() => stateStore!.expire(presenceInstanceKey(), opts.presenceTtlMs));
-      for (const userId of localUserIds) store(() => stateStore!.expire(presenceUserKey(userId), opts.presenceTtlMs));
+      for (const userId of localUserIds)
+        store(() => stateStore!.expire(presenceUserKey(userId), opts.presenceTtlMs));
     }
   };
 
@@ -328,10 +354,21 @@ export function createClusterSync(opts: ClusterSyncOptions): ClusterSync {
 
   return {
     publish(kind, key, name, frame) {
-      publishToCluster(kind, key ?? "", name, encodeClusterMessage(instanceId, kind, key ?? "", name, frame));
+      publishToCluster(
+        kind,
+        key ?? "",
+        name,
+        encodeClusterMessage(instanceId, kind, key ?? "", name, frame),
+      );
     },
     clientJoined(client) {
-      announce({ t: "j", i: instanceId, c: client.id, u: client.userId, at: Date.now() });
+      announce({
+        t: "j",
+        i: instanceId,
+        c: client.id,
+        ...(client.userId !== undefined ? { u: client.userId } : {}),
+        at: Date.now(),
+      });
       if (client.userId) localUserIds.add(client.userId);
       if (!stateStore) return;
       store(async () => {
@@ -347,7 +384,8 @@ export function createClusterSync(opts: ClusterSyncOptions): ClusterSync {
       if (!stateStore) return;
       store(async () => {
         await stateStore!.srem(presenceInstanceKey(), client.id);
-        if (client.userId) await stateStore!.srem(presenceUserKey(client.userId), `${instanceId}:${client.id}`);
+        if (client.userId)
+          await stateStore!.srem(presenceUserKey(client.userId), `${instanceId}:${client.id}`);
       });
     },
     userGroupChanged(name, members) {
@@ -478,8 +516,13 @@ function loadRedis(): unknown {
  * cluster channel (`{prefix}.cluster.*`), fire-and-forget publishes — never
  * blocks the caller. Async publish failures are reported to `onError`.
  */
-export function createRedisClusterTransport(opts: RedisConnectionOptions, onError?: (err: Error) => void): ClusterTransport {
-  const Redis = loadRedis() as new (...args: unknown[]) => {
+export function createRedisClusterTransport(
+  opts: RedisConnectionOptions,
+  onError?: (err: Error) => void,
+): ClusterTransport {
+  const Redis = loadRedis() as new (
+    ...args: unknown[]
+  ) => {
     publish(channel: string, data: Buffer): Promise<unknown>;
     subscribe(...channels: string[]): Promise<unknown>;
     psubscribe(...patterns: string[]): Promise<unknown>;
@@ -496,7 +539,9 @@ export function createRedisClusterTransport(opts: RedisConnectionOptions, onErro
     typeof opts === "string" ? { url: opts } : { options: opts };
   const make = (): InstanceType<typeof Redis> => {
     const c = conn();
-    return c.url ? new Redis(c.url, { returnBuffers: true }) : new Redis({ ...c.options, returnBuffers: true });
+    return c.url
+      ? new Redis(c.url, { returnBuffers: true })
+      : new Redis({ ...c.options, returnBuffers: true });
   };
   const pub = make();
   const sub = make();
@@ -642,7 +687,9 @@ export function createMemoryStateStore(
 export function createRedisStateStore(
   opts: RedisConnectionOptions = {},
 ): ClusterStateStore & { close(): Promise<void> } {
-  const Redis = loadRedis() as new (...args: unknown[]) => {
+  const Redis = loadRedis() as new (
+    ...args: unknown[]
+  ) => {
     get(key: string): Promise<unknown>;
     set(...args: unknown[]): Promise<unknown>;
     del(...keys: string[]): Promise<unknown>;

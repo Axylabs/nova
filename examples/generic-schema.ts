@@ -17,10 +17,10 @@
  * See docs/generic-bindings.md for the full guide (incl. the optional Rust FFI
  * fast path via `cargo build --release` in ignex/generated/rust).
  */
-import { Type, type TSchema } from "@sinclair/typebox";
+import { type TSchema, Type } from "@sinclair/typebox";
+import { createClient } from "../public/client";
 import { generateBindings } from "../public/generate";
 import { createServer } from "../public/server";
-import { createClient } from "../public/client";
 
 // ── 1. YOUR schema (this would live in src/schema.ts in a real app) ──────
 const ChatMsg = Type.Object(
@@ -47,10 +47,14 @@ console.log(`generated ${Object.keys(gen.files).length} files, fingerprint ${gen
 // (A dynamic, runtime-only import keeps this example typecheckable before the
 // first `generateBindings` run has created the folder.)
 import type { Bindings } from "../src/bindings/types";
-type MakeBindings = <E extends Record<string, TSchema>, C extends Record<string, TSchema>>(
-  s: { events: E; controlEvents?: C },
-) => Omit<Bindings, "events" | "controlEvents"> & { events: E; controlEvents: C };
-const { makeBindings } = (await import("./ignex/generated/index.ts" as string)) as { makeBindings: MakeBindings };
+
+type MakeBindings = <E extends Record<string, TSchema>, C extends Record<string, TSchema>>(s: {
+  events: E;
+  controlEvents?: C;
+}) => Omit<Bindings, "events" | "controlEvents"> & { events: E; controlEvents: C };
+const { makeBindings } = (await import("./ignex/generated/index.ts" as string)) as {
+  makeBindings: MakeBindings;
+};
 const bindings = makeBindings(schema);
 
 // ── 3. use the generic APIs — all typed against YOUR events ──────────────

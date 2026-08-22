@@ -10,9 +10,9 @@
  *   - graceful close stops delivery
  */
 import { describe, expect, test } from "bun:test";
-import { createServer } from "../public/server";
 import { createClient } from "../public/client";
-import { createMemoryStateStore, type ClusterTransport } from "../public/events";
+import { type ClusterTransport, createMemoryStateStore } from "../public/events";
+import { createServer } from "../public/server";
 import { quote, waitFor } from "./helpers";
 
 /** In-memory cluster bus: wildcard-subscribe (`x.>`), async delivery. */
@@ -23,7 +23,9 @@ class MemoryBus implements ClusterTransport {
     const copy = new Uint8Array(data);
     queueMicrotask(() => {
       for (const [pattern, cbs] of this.subs) {
-        const match = pattern.endsWith(".>") ? subject.startsWith(pattern.slice(0, -1)) : pattern === subject;
+        const match = pattern.endsWith(".>")
+          ? subject.startsWith(pattern.slice(0, -1))
+          : pattern === subject;
         if (match) for (const cb of cbs) cb(copy);
       }
     });

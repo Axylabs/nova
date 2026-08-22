@@ -17,8 +17,7 @@
  *     (src/bindings/assemble.ts). Everything else — encode, decode, NATS
  *     subject naming, server/client APIs — is then typed against YOUR events.
  */
-import type { TSchema } from "@sinclair/typebox";
-import type { Static } from "@sinclair/typebox";
+import type { Static, TSchema } from "@sinclair/typebox";
 
 /** Direct fast-path call signature (generated `direct-ser.ts`). */
 export type DirectCall = (...args: unknown[]) => number;
@@ -40,7 +39,10 @@ export interface DirectTables {
   /** event → NUL pre-scan (true routes the payload to the JSON path). */
   readonly hasNul: Readonly<Record<string, (o: unknown) => boolean>>;
   /** bind-time per-symbol self-test; returns the symbol names to DISABLE. */
-  readonly selfTest: (raw: Record<string, (...args: unknown[]) => number>, scratch: Uint8Array) => string[];
+  readonly selfTest: (
+    raw: Record<string, (...args: unknown[]) => number>,
+    scratch: Uint8Array,
+  ) => string[];
 }
 
 /**

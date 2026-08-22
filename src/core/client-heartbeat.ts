@@ -2,8 +2,9 @@
  * Client app-level Ping/Pong heartbeat — detects half-open connections and
  * forces a close so the reconnect path re-establishes the socket.
  */
-import { sendControl } from "./client-wire";
+
 import type { ClientState } from "./client-state";
+import { sendControl } from "./client-wire";
 
 export function startHeartbeat(state: ClientState): void {
   const ms = state.opts.heartbeatMs ?? 15000;

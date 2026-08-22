@@ -22,11 +22,17 @@
  */
 import { describe, expect, test } from "bun:test";
 import { createServer } from "../public/server";
-import { encodeEvent, encodeToScratch } from "../src/transport/transport";
+import {
+  decodeFrame,
+  eventNameToId,
+  isControlId,
+  WIRE_HEADER_LEN,
+  WIRE_VERSION,
+} from "../src/generated/registry";
 import { getFfi } from "../src/native/ffi";
-import { decodeFrame, eventNameToId, isControlId, WIRE_HEADER_LEN, WIRE_VERSION } from "../src/generated/registry";
+import type { EventName, Events } from "../src/schema";
+import { encodeEvent, encodeToScratch } from "../src/transport/transport";
 import { bytesContain, frameId, payloads, sizePrefix } from "./helpers";
-import type { Events, EventName } from "../src/schema";
 
 describe("wire-format envelope integrity", () => {
   test("frame invariant holds for every event ([version][event_id:u32] + size prefix == payload length)", () => {
@@ -55,7 +61,9 @@ describe("wire-format envelope integrity", () => {
     const q = { ...(payloads.quote as Events["quote"]), symbol: "INTEGRITY-PROBE-12345" };
     const frame = encodeEvent("quote", q);
     // the actual string value is present in the flatbuffer payload region
-    expect(bytesContain(frame.subarray(WIRE_HEADER_LEN), new TextEncoder().encode(q.symbol))).toBe(true);
+    expect(bytesContain(frame.subarray(WIRE_HEADER_LEN), new TextEncoder().encode(q.symbol))).toBe(
+      true,
+    );
     // the direct path must NOT embed the JSON source: no `"symbol"`/`"bid"` keys
     expect(bytesContain(frame, new TextEncoder().encode('{"symbol"'))).toBe(false);
     expect(bytesContain(frame, new TextEncoder().encode('"bid"'))).toBe(false);
@@ -131,7 +139,7 @@ describe("hostile-frame robustness (untrusted decoder input)", () => {
     new DataView(tradeFrame.buffer, tradeFrame.byteOffset).setUint32(1, eventNameToId.quote, true); // lie
     const decoded = decodeFrame(tradeFrame);
     expect(decoded?.name).toBe("quote");
-    expect(typeof (decoded?.payload as { symbol?: unknown }).symbol).toBe("string");
+    expect(typeof (decoded!.payload as { symbol?: unknown }).symbol).toBe("string");
   });
 });
 
@@ -190,12 +198,14 @@ describe("injection & content isolation", () => {
     // neither the global Object prototype nor Object.prototype got polluted
     expect(({} as Record<string, unknown>).hacked).toBeUndefined();
     expect(({} as Record<string, unknown>).polluted).toBeUndefined();
-    expect(({}.constructor as { prototype?: Record<string, unknown> }).prototype?.polluted).toBeUndefined();
+    expect(
+      ({}.constructor as { prototype?: Record<string, unknown> }).prototype?.polluted,
+    ).toBeUndefined();
     // and the hostile keys did not leak into the decoded payload as OWN keys
     // (`'__proto__' in obj` is true for every object — the accessor lives on
     // Object.prototype — so check for an own property instead).
-    expect(Object.prototype.hasOwnProperty.call(decoded!.payload, "__proto__")).toBe(false);
-    expect(Object.prototype.hasOwnProperty.call(decoded!.payload, "constructor")).toBe(false);
+    expect(Object.hasOwn(decoded!.payload as object, "__proto__")).toBe(false);
+    expect(Object.hasOwn(decoded!.payload as object, "constructor")).toBe(false);
   });
 
   test("HTML/JS-special content round-trips exactly (binary transport is injection-safe)", () => {
@@ -269,8 +279,8 @@ describe("broadcast integrity", () => {
       }
       // and the frame decodes to the payload that was published
       const dec = decodeFrame(received[0]![i]!);
-      expect(dec?.name).toBe("complex");
-      expect((dec?.payload as Events["complex"]).id).toBe(`c${i}`);
+      expect(dec!.name).toBe("complex");
+      expect((dec!.payload as Events["complex"]).id).toBe(`c${i}`);
     }
 
     for (const ws of sockets) ws.close();

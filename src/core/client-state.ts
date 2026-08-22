@@ -3,8 +3,9 @@
  * explicit state object the client action functions read/mutate. The option /
  * status types are the PUBLIC surface and are re-exported by `public/client.ts`.
  */
-import type { Bindings, DefaultBindings } from "../bindings/types";
+
 import { defaultBindings } from "../bindings/default";
+import type { Bindings, DefaultBindings } from "../bindings/types";
 
 export type ClientStatus = "connecting" | "connected" | "disconnected" | "reconnecting" | "closed";
 

@@ -17,9 +17,10 @@
  * Typed against the BUILT-IN event registry. Custom-schema apps should use
  * `server.events.emit` / `server.events.on` (fully typed against YOUR events).
  */
-import type { EventName, Events } from "../schema";
+
 import type { DefaultBindings } from "../bindings/types";
-import type { EventContext, EmitTarget, EventsHub, EventHandler } from "./types";
+import type { EventName, Events } from "../schema";
+import type { EmitTarget, EventContext, EventHandler, EventsHub } from "./types";
 
 let bound: EventsHub | null = null;
 
@@ -67,7 +68,11 @@ export function emitToUser<K extends EventName>(userId: string, name: K, payload
   requireHub().emitToUser(userId, name as never, payload as never);
 }
 
-export function emitToClient<K extends EventName>(clientId: string, name: K, payload: Events[K]): void {
+export function emitToClient<K extends EventName>(
+  clientId: string,
+  name: K,
+  payload: Events[K],
+): void {
   requireHub().emitToClient(clientId, name as never, payload as never);
 }
 
@@ -75,11 +80,17 @@ export function on<K extends EventName>(name: K, handler: EventHandler<DefaultBi
   requireHub().on(name as never, handler as never);
 }
 
-export function off<K extends EventName>(name: K, handler?: EventHandler<DefaultBindings, K>): void {
+export function off<K extends EventName>(
+  name: K,
+  handler?: EventHandler<DefaultBindings, K>,
+): void {
   requireHub().off(name as never, handler as never);
 }
 
-export function once<K extends EventName>(name: K, handler: EventHandler<DefaultBindings, K>): void {
+export function once<K extends EventName>(
+  name: K,
+  handler: EventHandler<DefaultBindings, K>,
+): void {
   requireHub().once(name as never, handler as never);
 }
 
@@ -91,10 +102,16 @@ export function offAny(cb: (name: string, payload: unknown, ctx: EventContext) =
   requireHub().offAny(cb as never);
 }
 
-export function onServerEvent<K extends EventName>(name: K, handler: EventHandler<DefaultBindings, K>): void {
+export function onServerEvent<K extends EventName>(
+  name: K,
+  handler: EventHandler<DefaultBindings, K>,
+): void {
   requireHub().onServerEvent(name as never, handler as never);
 }
 
-export function offServerEvent<K extends EventName>(name: K, handler?: EventHandler<DefaultBindings, K>): void {
+export function offServerEvent<K extends EventName>(
+  name: K,
+  handler?: EventHandler<DefaultBindings, K>,
+): void {
   requireHub().offServerEvent(name as never, handler as never);
 }

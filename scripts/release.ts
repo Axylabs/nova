@@ -177,6 +177,7 @@ async function confirm(question: string): Promise<boolean> {
 
 /* ------------------------------------------------------------------ */
 
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: release wizard is inherently branchy
 async function main(): Promise<void> {
   const args = parseCli(process.argv.slice(2));
   const manifest = readManifest();
@@ -218,7 +219,9 @@ async function main(): Promise<void> {
   if (args.publish) {
     const ready = args.yes || (await confirm(`Publish ${manifest.name}@${nextVersion} to npm?`));
     if (!ready) {
-      console.log("✋ publish declined — version is bumped. Rerun with --no-bump --no-verify --no-commit to publish.");
+      console.log(
+        "✋ publish declined — version is bumped. Rerun with --no-bump --no-verify --no-commit to publish.",
+      );
       return;
     }
     const publishArgs = ["publish", "--tag", args.distTag, "--access", args.access];

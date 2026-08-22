@@ -4,7 +4,7 @@
  *   - getAddonPath honors IGNEX_FFI_PATH and resolves the dev build on Linux
  */
 import { describe, expect, test } from "bun:test";
-import { addonFilename, addonCandidates, getAddonPath } from "../src/native/loader";
+import { addonCandidates, addonFilename, getAddonPath } from "../src/native/loader";
 
 describe("addon resolution", () => {
   test("filename maps per-platform", () => {

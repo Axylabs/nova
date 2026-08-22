@@ -7,13 +7,13 @@
  * PUBLIC surface and are re-exported by `public/server.ts`.
  */
 import type { ServerWebSocket } from "bun";
+import { defaultBindings } from "../bindings/default";
 import type { Bindings, DefaultBindings, EventNameOf } from "../bindings/types";
+import type { NatsBridge, NatsBridgeOptions } from "../bridge/nats";
+import { createTransport, defaultTransport, type Transport } from "../transport/transport";
 import type { Int64GuardMode } from "./int64-guard";
 import { createMetrics, type Metrics } from "./metrics";
-import { RingBuffer } from "./ring";
-import type { NatsBridge, NatsBridgeOptions } from "../bridge/nats";
-import { defaultBindings } from "../bindings/default";
-import { createTransport, defaultTransport, type Transport } from "../transport/transport";
+import type { RingBuffer } from "./ring";
 
 /**
  * Optional identity metadata a client may carry for targeting / grouping.
@@ -182,7 +182,9 @@ export interface ServerState {
   onGroupChange?: (group: string, ws: ServerWebSocket<WsData>, joined: boolean) => void;
 }
 
-export function createServerState<B extends Bindings = DefaultBindings>(options: IgnServerOptions<B>): ServerState {
+export function createServerState<B extends Bindings = DefaultBindings>(
+  options: IgnServerOptions<B>,
+): ServerState {
   const bindings = options.bindings ?? defaultBindings;
   return {
     bindings,
@@ -198,11 +200,11 @@ export function createServerState<B extends Bindings = DefaultBindings>(options:
       : null,
     metrics: createMetrics(),
     startedAt: Date.now(),
-    authenticate: options.authenticate,
-    allowedOrigins: options.allowedOrigins,
-    token: options.token,
-    maxConnections: options.maxConnections,
-    maxMessageSize: options.maxMessageSize,
+    ...(options.authenticate !== undefined ? { authenticate: options.authenticate } : {}),
+    ...(options.allowedOrigins !== undefined ? { allowedOrigins: options.allowedOrigins } : {}),
+    ...(options.token !== undefined ? { token: options.token } : {}),
+    ...(options.maxConnections !== undefined ? { maxConnections: options.maxConnections } : {}),
+    ...(options.maxMessageSize !== undefined ? { maxMessageSize: options.maxMessageSize } : {}),
     replay: options.replay ? { historySize: options.replay.historySize ?? 64 } : null,
     sockets: new Set(),
     clients: new Map(),

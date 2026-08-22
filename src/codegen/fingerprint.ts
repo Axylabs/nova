@@ -9,8 +9,9 @@
  * The value only needs to be stable per schema (any collision would just
  * produce a false bind failure — harmless); it is NOT security.
  */
-import type { Model } from "./schema-model";
+
 import { fnv1a32 } from "./hash";
+import type { Model } from "./schema-model";
 
 /** Stable comparator: ascending by name. */
 function byName(a: { name: string }, b: { name: string }): number {
@@ -31,7 +32,9 @@ export function schemaFingerprint(m: Model, wireVersion: number): number {
       if (a.fbName > b.fbName) return 1;
       return 0;
     })) {
-      lines.push(`  ${f.fbName}:${f.kind}:${f.required}:${f.enumName ?? ""}:${f.tableName ?? ""}:${f.bigint ? "bigint" : ""}`);
+      lines.push(
+        `  ${f.fbName}:${f.kind}:${f.required}:${f.enumName ?? ""}:${f.tableName ?? ""}:${f.bigint ? "bigint" : ""}`,
+      );
     }
   }
   for (const e of [...m.enums].sort(byName)) {

@@ -24,11 +24,11 @@ import type { IgnServer } from "../core/server";
 import type { ServerState, WsData } from "../core/state";
 import { createClientStore } from "./clients";
 import {
+  type ClusterSync,
   createClusterSync,
   createMemoryStateStore,
   createNatsClusterTransport,
   createRedisClusterTransport,
-  type ClusterSync,
 } from "./cluster";
 import { createEmitter, deliverLocal, type EmitCounters } from "./emit";
 import { bindEvents, unbindEvents } from "./global";
@@ -43,11 +43,11 @@ import type {
   EventClient,
   EventContext,
   EventHandler,
+  EventSource,
   EventsClusterOptions,
   EventsHub,
   EventsMetricsSnapshot,
   EventsOptions,
-  EventSource,
   UserGroup,
 } from "./types";
 
@@ -79,7 +79,11 @@ function resolveClusterTransport(
     const nats = opts.nats;
     if (typeof nats === "boolean") {
       if (serverBridge) return { transport: createNatsClusterTransport(serverBridge) };
-      const own = createNatsBridge({ servers: ["nats://localhost:4222"], inbound: false }, undefined, bindings);
+      const own = createNatsBridge(
+        { servers: ["nats://localhost:4222"], inbound: false },
+        undefined,
+        bindings,
+      );
       return { transport: createNatsClusterTransport(own), ownBridge: own };
     }
     if ("status" in nats) return { transport: createNatsClusterTransport(nats) };
@@ -90,14 +94,16 @@ function resolveClusterTransport(
   return {};
 }
 
-export function createEventsHub<B extends Bindings = DefaultBindings>(opts: CreateEventsHubOptions<B>): EventsHubInternal<B> {
+export function createEventsHub<B extends Bindings = DefaultBindings>(
+  opts: CreateEventsHubOptions<B>,
+): EventsHubInternal<B> {
   const { state, server, bindings, serverBridge } = opts;
   const eOpts = opts.options;
   const instanceId = eOpts.cluster?.instanceId ?? crypto.randomUUID();
   const prefix = eOpts.cluster?.prefix ?? bindings.subjectPrefix ?? "ignex";
   const queue = createTaskQueue({
-    workers: eOpts.queue?.workers,
-    maxPending: eOpts.queue?.maxPending,
+    ...(eOpts.queue?.workers !== undefined ? { workers: eOpts.queue.workers } : {}),
+    ...(eOpts.queue?.maxPending !== undefined ? { maxPending: eOpts.queue.maxPending } : {}),
   });
   const counters: EmitCounters = {
     emitted: 0,
@@ -123,7 +129,12 @@ export function createEventsHub<B extends Bindings = DefaultBindings>(opts: Crea
   let ownBridge: NatsBridge | undefined;
   let stateStore: ClusterStateStore | undefined;
   if (eOpts.cluster) {
-    const resolved = resolveClusterTransport(eOpts.cluster, serverBridge, bindings, reportClusterError);
+    const resolved = resolveClusterTransport(
+      eOpts.cluster,
+      serverBridge,
+      bindings,
+      reportClusterError,
+    );
     if (!resolved.transport) {
       throw new Error(
         "ignex events: cluster configured without a transport — set cluster.nats, cluster.redis, or cluster.transport",
@@ -140,6 +151,7 @@ export function createEventsHub<B extends Bindings = DefaultBindings>(opts: Crea
       stateStore,
       presenceTtlMs: eOpts.cluster.presenceTtlMs ?? 60_000,
       heartbeatMs: eOpts.cluster.heartbeatMs ?? 15_000,
+      // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: cluster frame fan-out is inherently branchy
       onRemoteFrame: (kind, key, name, frame) => {
         let target: EmitTarget;
         if (kind === "broadcast") target = { type: "broadcast" };
@@ -152,7 +164,11 @@ export function createEventsHub<B extends Bindings = DefaultBindings>(opts: Crea
           const id = bindings.anyEventNameToId[name];
           if (id !== undefined) {
             try {
-              registry.dispatchServerEvent(name, bindings.decodePayload(id, frame), makeCtx(undefined, "remote"));
+              registry.dispatchServerEvent(
+                name,
+                bindings.decodePayload(id, frame),
+                makeCtx(undefined, "remote"),
+              );
             } catch (err) {
               reportClusterError(err instanceof Error ? err : new Error(String(err)));
             }
@@ -166,7 +182,13 @@ export function createEventsHub<B extends Bindings = DefaultBindings>(opts: Crea
   // ── emitter ───────────────────────────────────────────────────────────
   const userSockets = (userId: string): ServerWebSocket<WsData>[] =>
     clients.byUser(userId).map((c) => c.ws);
-  const emitter = createEmitter({ state, bridge: serverBridge, cluster, userSockets, counters });
+  const emitter = createEmitter({
+    state,
+    ...(serverBridge !== undefined ? { bridge: serverBridge } : {}),
+    ...(cluster !== undefined ? { cluster } : {}),
+    userSockets,
+    counters,
+  });
 
   // ── groups ────────────────────────────────────────────────────────────
   const groups: GroupManager<B> = createGroupManager<B>({
@@ -183,17 +205,25 @@ export function createEventsHub<B extends Bindings = DefaultBindings>(opts: Crea
       hub: api,
       server,
       emit: (name, payload, target) => api.emit(name as never, payload as never, target),
-      emitToGroup: (group, name, payload) => api.emitToGroup(group, name as never, payload as never),
-      emitToUser: (userId, name, payload) => api.emitToUser(userId, name as never, payload as never),
-      emitToClient: (clientId, name, payload) => api.emitToClient(clientId, name as never, payload as never),
-      emitToTopic: (topic, name, payload) => api.emitToTopic(topic, name as never, payload as never),
+      emitToGroup: (group, name, payload) =>
+        api.emitToGroup(group, name as never, payload as never),
+      emitToUser: (userId, name, payload) =>
+        api.emitToUser(userId, name as never, payload as never),
+      emitToClient: (clientId, name, payload) =>
+        api.emitToClient(clientId, name as never, payload as never),
+      emitToTopic: (topic, name, payload) =>
+        api.emitToTopic(topic, name as never, payload as never),
       ...(client ? { client } : {}),
     };
     return ctx;
   };
 
   // ── inbound dispatch (client-sent events → handlers) ──────────────────
-  const dispatchClientEvent = (name: string, payload: unknown, ws: ServerWebSocket<WsData>): void => {
+  const dispatchClientEvent = (
+    name: string,
+    payload: unknown,
+    ws: ServerWebSocket<WsData>,
+  ): void => {
     const client = clients.get(ws.data.id) ?? attach(ws);
     registry.dispatch(name, payload, makeCtx(client, "client"));
   };
@@ -202,14 +232,21 @@ export function createEventsHub<B extends Bindings = DefaultBindings>(opts: Crea
     if (dispatchers.has(name)) return;
     dispatchers.add(name);
     server.allowInbound(name as never);
-    server.on(name as never, ((payload: unknown, ws: ServerWebSocket<WsData>) => dispatchClientEvent(name, payload, ws)) as never);
+    server.on(
+      name as never,
+      ((payload: unknown, ws: ServerWebSocket<WsData>) =>
+        dispatchClientEvent(name, payload, ws)) as never,
+    );
   };
 
   // ── client lifecycle ──────────────────────────────────────────────────
   const attach = (ws: ServerWebSocket<WsData>): EventClient | undefined => {
     const client = clients.attach(ws);
     if (!client) return undefined;
-    cluster?.clientJoined({ id: client.id, userId: client.userId });
+    cluster?.clientJoined({
+      id: client.id,
+      ...(client.userId !== undefined ? { userId: client.userId } : {}),
+    });
     eOpts.onConnect?.(client);
     return client;
   };
@@ -217,7 +254,10 @@ export function createEventsHub<B extends Bindings = DefaultBindings>(opts: Crea
   const detach = (ws: ServerWebSocket<WsData>): EventClient | undefined => {
     const client = clients.detach(ws);
     if (!client) return undefined;
-    cluster?.clientLeft({ id: client.id, userId: client.userId });
+    cluster?.clientLeft({
+      id: client.id,
+      ...(client.userId !== undefined ? { userId: client.userId } : {}),
+    });
     eOpts.onDisconnect?.(client);
     return client;
   };
@@ -309,8 +349,14 @@ export function createEventsHub<B extends Bindings = DefaultBindings>(opts: Crea
       const before = clients.get(clientId)?.userId;
       if (!clients.setUserId(clientId, userId)) return;
       if (before !== userId) {
-        cluster?.clientLeft({ id: clientId, userId: before });
-        cluster?.clientJoined({ id: clientId, userId });
+        cluster?.clientLeft({
+          id: clientId,
+          ...(before !== undefined ? { userId: before } : {}),
+        });
+        cluster?.clientJoined({
+          id: clientId,
+          ...(userId !== undefined ? { userId } : {}),
+        });
       }
     },
     setClientData(clientId, key, value) {
@@ -400,7 +446,11 @@ export function createEventsHub<B extends Bindings = DefaultBindings>(opts: Crea
       closed = true;
       if (boundGlobal) unbindEvents();
       // announce local leaves so remote presence converges before we shut down
-      for (const c of clients.all()) cluster?.clientLeft({ id: c.id, userId: c.userId });
+      for (const c of clients.all())
+        cluster?.clientLeft({
+          id: c.id,
+          ...(c.userId !== undefined ? { userId: c.userId } : {}),
+        });
       await cluster?.close();
       await queue.drain();
       queue.close();
@@ -420,4 +470,12 @@ export function createEventsHub<B extends Bindings = DefaultBindings>(opts: Crea
   return api;
 }
 
-export type { ClientGroup, ClusterStateStore, EmitTarget, EventHandler, EventsHub, EventsOptions, UserGroup };
+export type {
+  ClientGroup,
+  ClusterStateStore,
+  EmitTarget,
+  EventHandler,
+  EventsHub,
+  EventsOptions,
+  UserGroup,
+};

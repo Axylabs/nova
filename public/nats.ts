@@ -11,12 +11,13 @@
  * Generic: pass your own generated bindings so inbound frames decode YOUR
  * events: `createNatsBridge({ servers, bindings })`.
  */
-export { createNatsBridge } from "../src/bridge/nats";
+
 export type {
-  NatsBridgeOptions,
   NatsBridge,
+  NatsBridgeOptions,
   NatsBridgeStats,
   NatsBridgeStatus,
   NatsTransport,
 } from "../src/bridge/nats";
+export { createNatsBridge } from "../src/bridge/nats";
 export { createSubjectBuilder, type SubjectBuilder } from "../src/bridge/subjects";

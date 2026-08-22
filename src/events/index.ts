@@ -2,17 +2,11 @@
  * Events layer — internal barrel. Public entry: `public/events.ts`
  * (`ignex-nova/events`).
  */
-export { createEventsHub } from "./hub";
-export type { EventsHubInternal } from "./hub";
-export { createClientData } from "./data";
+
 export { createClientStore, createEventClient } from "./clients";
-export { createHandlerRegistry } from "./registry";
-export { createGroupManager } from "./groups";
-export { createTaskQueue } from "./queue";
-export { createEmitter, deliverLocal } from "./emit";
 export {
-  createClusterSync,
   createClusterSubjects,
+  createClusterSync,
   createMemoryStateStore,
   createNatsClusterTransport,
   createRedisClusterTransport,
@@ -20,6 +14,8 @@ export {
   decodeClusterMessage,
   encodeClusterMessage,
 } from "./cluster";
+export { createClientData } from "./data";
+export { createEmitter, deliverLocal } from "./emit";
 export {
   bindEvents,
   emit,
@@ -34,10 +30,15 @@ export {
   offServerEvent,
   on,
   onAny,
-  onServerEvent,
   once,
+  onServerEvent,
   unbindEvents,
 } from "./global";
+export { createGroupManager } from "./groups";
+export type { EventsHubInternal } from "./hub";
+export { createEventsHub } from "./hub";
+export { createTaskQueue } from "./queue";
+export { createHandlerRegistry } from "./registry";
 export type {
   ClientData,
   ClientGroup,
@@ -48,11 +49,11 @@ export type {
   EventClient,
   EventContext,
   EventHandler,
+  EventSource,
   EventsClusterOptions,
   EventsHub,
   EventsMetricsSnapshot,
   EventsOptions,
-  EventSource,
   RedisConnectionOptions,
   RemoteClient,
   ServerEventHandler,

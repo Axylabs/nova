@@ -10,9 +10,9 @@
  */
 import { expect } from "bun:test";
 import { createServer, type IgnServer, type IgnServerOptions } from "../public/server";
-import { encodeEvent } from "../src/transport/transport";
 import { decodeFrame, WIRE_HEADER_LEN } from "../src/generated/registry";
-import type { Events, EventName } from "../src/schema";
+import type { EventName, Events } from "../src/schema";
+import { encodeEvent } from "../src/transport/transport";
 
 // ── async helpers ──────────────────────────────────────────────────────
 
@@ -36,7 +36,10 @@ export function openWs(url: string): Promise<WebSocket> {
 }
 
 /** True if the WebSocket upgrade succeeds (onopen fired), false otherwise. */
-export function tryConnect(url: string, init?: { headers?: Record<string, string> }): Promise<boolean> {
+export function tryConnect(
+  url: string,
+  init?: { headers?: Record<string, string> },
+): Promise<boolean> {
   return new Promise((resolve) => {
     const ws = new WebSocket(url, init as never);
     let settled = false;
@@ -59,7 +62,10 @@ export function tryConnect(url: string, init?: { headers?: Record<string, string
 }
 
 /** Boot a server on an ephemeral port; returns the server + its ws url. */
-export function bootServer(options: Omit<IgnServerOptions, "port"> = {}): { server: IgnServer; url: string } {
+export function bootServer(options: Omit<IgnServerOptions, "port"> = {}): {
+  server: IgnServer;
+  url: string;
+} {
   const server = createServer({ port: 0, ...options });
   return { server, url: `ws://localhost:${server.port}/ws` };
 }

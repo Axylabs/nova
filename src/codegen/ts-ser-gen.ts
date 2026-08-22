@@ -23,6 +23,7 @@ import { plainTsType, toSnake } from "./schema-model";
  * `Events` / `ControlEvents` payload maps (over the already-local `XxxPlain`
  * types) instead of importing the app schema.
  */
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: string-emitting codegen is inherently branchy
 export function emitTsSer(m: Model, ctx: EmitContext = {}): string {
   const needed = new Set<string>();
   const visit = (name: string) => {
@@ -58,7 +59,9 @@ export function emitTsSer(m: Model, ctx: EmitContext = {}): string {
   lines.push('} from "./ts/backend";');
   lines.push('import { anyEventNameToId, WIRE_HEADER_LEN, WIRE_VERSION } from "./registry";');
   if (!userMode) {
-    lines.push(`import type { AnyEventName, ControlEvents, Events } from ${JSON.stringify(schemaImport)};`);
+    lines.push(
+      `import type { AnyEventName, ControlEvents, Events } from ${JSON.stringify(schemaImport)};`,
+    );
   }
   lines.push("");
   if (userMode) lines.push(...emitLocalTypeMap(m, appEventsOf(m), controlEventsOf(m)));
@@ -68,7 +71,9 @@ export function emitTsSer(m: Model, ctx: EmitContext = {}): string {
     lines.push(`const ${toSnake(name).toUpperCase()} = { ${entries} } as const;`);
   }
   if (usedEnums.size > 0) lines.push("");
-  lines.push("/** pooled builder — each encode clears it (safe because encodeEventFrame copies). */");
+  lines.push(
+    "/** pooled builder — each encode clears it (safe because encodeEventFrame copies). */",
+  );
   lines.push("let shared: flatbuffers.Builder | null = null;");
   lines.push("function getBuilder(): flatbuffers.Builder {");
   lines.push("  if (!shared) shared = new flatbuffers.Builder(1024);");
@@ -79,7 +84,8 @@ export function emitTsSer(m: Model, ctx: EmitContext = {}): string {
   // per-table plain input types
   for (const t of neededTables) {
     lines.push(`type ${t.name}Plain = {`);
-    for (const f of t.fields) lines.push(`  ${f.jsonName}${f.required ? "" : "?"}: ${plainTsType(m, f, "Plain")};`);
+    for (const f of t.fields)
+      lines.push(`  ${f.jsonName}${f.required ? "" : "?"}: ${plainTsType(m, f, "Plain")};`);
     lines.push("};");
     lines.push("");
   }
@@ -99,8 +105,12 @@ export function emitTsSer(m: Model, ctx: EmitContext = {}): string {
     const annot = ev.control
       ? `ControlEvents[${JSON.stringify(ev.name)}]`
       : `Events[${JSON.stringify(ev.name)}]`;
-    lines.push(`/** ${ev.control ? "control " : ""}payload encoder: plain object → size-prefixed FlatBuffer. */`);
-    lines.push(`export function encode${pascal(ev.name)}Payload(o: ${annot}, b: flatbuffers.Builder = getBuilder()): Uint8Array {`);
+    lines.push(
+      `/** ${ev.control ? "control " : ""}payload encoder: plain object → size-prefixed FlatBuffer. */`,
+    );
+    lines.push(
+      `export function encode${pascal(ev.name)}Payload(o: ${annot}, b: flatbuffers.Builder = getBuilder()): Uint8Array {`,
+    );
     lines.push("  b.clear();");
     lines.push(`  b.finishSizePrefixed(build${ev.tableName}T(o).pack(b));`);
     lines.push("  return b.asUint8Array();");
@@ -111,18 +121,25 @@ export function emitTsSer(m: Model, ctx: EmitContext = {}): string {
   lines.push("export type JsEncoder = (o: unknown, b?: flatbuffers.Builder) => Uint8Array;");
   lines.push("");
   lines.push("export const jsEncoders: Record<string, JsEncoder> = {");
-  for (const ev of m.events) lines.push(`  ${ev.name}: encode${pascal(ev.name)}Payload as JsEncoder,`);
+  for (const ev of m.events)
+    lines.push(`  ${ev.name}: encode${pascal(ev.name)}Payload as JsEncoder,`);
   lines.push("};");
   lines.push("");
   lines.push("/** Encode a payload (app or control event) → size-prefixed FlatBuffer. */");
-  lines.push("export function encodeJsPayload(name: AnyEventName, o: unknown, b?: flatbuffers.Builder): Uint8Array {");
+  lines.push(
+    "export function encodeJsPayload(name: AnyEventName, o: unknown, b?: flatbuffers.Builder): Uint8Array {",
+  );
   lines.push("  const enc = jsEncoders[name];");
   lines.push('  if (!enc) throw new Error(`ignex: no JS encoder for "${name}" — regenerate`);');
   lines.push("  return enc(o, b);");
   lines.push("}");
   lines.push("");
-  lines.push("/** Encode a payload into a full wire frame `[version][event_id:u32][size-prefixed FB]`. */");
-  lines.push("export function encodeEventFrame(name: AnyEventName, o: unknown, b?: flatbuffers.Builder): Uint8Array {");
+  lines.push(
+    "/** Encode a payload into a full wire frame `[version][event_id:u32][size-prefixed FB]`. */",
+  );
+  lines.push(
+    "export function encodeEventFrame(name: AnyEventName, o: unknown, b?: flatbuffers.Builder): Uint8Array {",
+  );
   lines.push("  const payload = encodeJsPayload(name, o, b);");
   lines.push("  const id = anyEventNameToId[name]!;");
   lines.push("  const frame = new Uint8Array(WIRE_HEADER_LEN + payload.byteLength);");
@@ -144,10 +161,16 @@ function controlEventsOf(m: Model) {
 }
 
 /** Local `EventName` / `Events` / `ControlEvents` type map over the XxxPlain types. */
-function emitLocalTypeMap(m: Model, appEvents: Model["events"], controlEvents: Model["events"]): string[] {
+function emitLocalTypeMap(
+  _m: Model,
+  appEvents: Model["events"],
+  controlEvents: Model["events"],
+): string[] {
   const lines: string[] = [];
   lines.push(`export type EventName = ${appEvents.map((e) => `"${e.name}"`).join(" | ")};`);
-  lines.push(`export type ControlEventName = ${controlEvents.map((e) => `"${e.name}"`).join(" | ")};`);
+  lines.push(
+    `export type ControlEventName = ${controlEvents.map((e) => `"${e.name}"`).join(" | ")};`,
+  );
   lines.push("export type AnyEventName = EventName | ControlEventName;");
   lines.push("");
   lines.push("export type Events = {");
