@@ -217,5 +217,11 @@ function ctorArg(f: FieldDef, o: string): string {
 }
 
 function pascal(s: string): string {
-  return s.charAt(0).toUpperCase() + s.slice(1);
+  // "chat.send" → "ChatSend": split on non-alphanumerics so event names with
+  // dots/hyphens still produce valid identifiers (encodeChatSendPayload...).
+  return s
+    .split(/[^a-zA-Z0-9]+/)
+    .filter((part) => part.length > 0)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join("");
 }
