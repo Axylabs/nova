@@ -30,6 +30,8 @@ export { createNatsBridge } from "../src/bridge/nats";
 export type { Int64GuardMode } from "../src/core/int64-guard";
 export type { MetricsSnapshot } from "../src/core/metrics";
 export { type ClientInfo, createServer, type IgnServer } from "../src/core/server";
+// Durable topic log (replay seam) — `createServer({ topicLog })` + adapters.
+export { createMemoryTopicLog, type LoggedFrame, type TopicLog } from "../src/core/topic-log";
 export type {
   AuthResult,
   BackpressurePolicy,
@@ -40,6 +42,7 @@ export type {
 } from "../src/core/state";
 // Events layer — re-exported so `createServer({ events })` is fully typed
 // without a separate import (the runtime API is `@ignex/nova/events`).
+export type { DeliveryPolicy } from "../src/events/delivery";
 export type {
   ClientData,
   ClientGroup,
@@ -59,3 +62,10 @@ export type {
   ServerEventHandler,
   UserGroup,
 } from "../src/events/types";
+// Event trace (debugger visibility) — `server.getEventTrace()` surface types.
+export type {
+  EventTraceOptions,
+  EventTraceRow,
+  EventTraceStats,
+  TraceDirection,
+} from "../src/events/trace";

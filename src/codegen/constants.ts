@@ -9,10 +9,20 @@
  */
 
 /** Wire format version. Bump on any BREAKING envelope change. */
-export const WIRE_VERSION = 1;
+export const WIRE_VERSION = 2;
 
 /**
- * Envelope header length in bytes: `[version:1][event_id:u32 LE]`. The
- * size-prefixed FlatBuffer payload follows immediately after.
+ * Envelope header length in bytes:
+ *   [version:1][event_id:u32 LE][flags:1][seq:u64 LE]
+ * The size-prefixed FlatBuffer payload follows immediately after.
+ *
+ * `flags` bit0 = seq-valid: the server stamps a per-CONNECTION delivery seq on
+ * every frame it writes to a socket (mutated in place just before `ws.send`,
+ * which copies). Clients use it for gap detection + resume. Frames that were
+ * not per-destination stamped (client-encoded, replay history copies before
+ * stamping) carry flags=0 / seq=0.
  */
-export const WIRE_HEADER_LEN = 5;
+export const WIRE_HEADER_LEN = 14;
+
+/** flags bit: `seq` field carries a valid per-connection delivery sequence. */
+export const WIRE_FLAG_SEQ = 1;

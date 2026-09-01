@@ -199,6 +199,17 @@ function ensureTable(ctx: Ctx, schema: AnySchema, fallbackName: string): string 
   return name;
 }
 
+/**
+ * Error for TypeBox field kinds that have no FlatBuffers representation. These
+ * used to be silently coerced to `string` fields (which forced JSON.stringify
+ * on the app side and put raw JSON text on the wire) — fail loudly instead.
+ */
+function unsupportedFieldType(parentName: string, jsonName: string, reason: string): Error {
+  return new Error(
+    `generateBindings: field "${jsonName}" in "${parentName}" has no FlatBuffers representation (${reason}) — model it explicitly: Type.String() for a JSON payload, a typed object/table, or a flat scalar/vector type`,
+  );
+}
+
 function resolveFieldType(
   ctx: Ctx,
   schema: AnySchema,
@@ -216,7 +227,11 @@ function resolveFieldType(
       const tableName = ensureTable(ctx, tableMember, `${parentName}${toPascal(jsonName)}`);
       return { kind: "table", tableName };
     }
-    return { kind: "string" };
+    throw unsupportedFieldType(
+      parentName,
+      jsonName,
+      "union of mixed members (only string-literal enums and single-object unions are supported)",
+    );
   }
 
   switch (schema.type) {
@@ -262,12 +277,22 @@ function resolveFieldType(
       }
     }
     case "object": {
-      if (!isObjectLike(schema)) return { kind: "string" };
+      if (!isObjectLike(schema)) {
+        throw unsupportedFieldType(
+          parentName,
+          jsonName,
+          "dynamic-key object (Type.Record / additionalProperties) has no FlatBuffers table representation",
+        );
+      }
       const tableName = ensureTable(ctx, schema, `${parentName}${toPascal(jsonName)}`);
       return { kind: "table", tableName };
     }
     default:
-      return { kind: "string" };
+      throw unsupportedFieldType(
+        parentName,
+        jsonName,
+        `unrecognized TypeBox type ${schema.type === undefined ? "(Type.Any()/Type.Unknown()?)" : `"${String(schema.type)}"`}`,
+      );
   }
 }
 

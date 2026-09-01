@@ -135,7 +135,7 @@ export function emitTsSer(m: Model, ctx: EmitContext = {}): string {
   lines.push("}");
   lines.push("");
   lines.push(
-    "/** Encode a payload into a full wire frame `[version][event_id:u32][size-prefixed FB]`. */",
+    "/** Encode a payload into a full wire frame `[version][event_id:u32][flags:1][seq:u64 LE][size-prefixed FB]`. */",
   );
   lines.push(
     "export function encodeEventFrame(name: AnyEventName, o: unknown, b?: flatbuffers.Builder): Uint8Array {",
@@ -145,6 +145,9 @@ export function emitTsSer(m: Model, ctx: EmitContext = {}): string {
   lines.push("  const frame = new Uint8Array(WIRE_HEADER_LEN + payload.byteLength);");
   lines.push("  frame[0] = WIRE_VERSION;");
   lines.push("  new DataView(frame.buffer).setUint32(1, id, true);");
+  lines.push("  // pristine delivery header (flags=0, seq=0) — client-sent frames are not stamped");
+  lines.push("  frame[WIRE_HEADER_LEN - 9] = 0;");
+  lines.push("  new DataView(frame.buffer).setBigUint64(WIRE_HEADER_LEN - 8, 0n, true);");
   lines.push("  frame.set(payload, WIRE_HEADER_LEN);");
   lines.push("  return frame;");
   lines.push("}");

@@ -19,6 +19,7 @@ import { sendFrame } from "../core/outbound";
 import { publishToGroup } from "../core/groups";
 import { publishToRoom } from "../core/rooms";
 import type { ClusterSync } from "./cluster";
+import { capturePayload } from "./trace";
 import type { EmitTarget, EmitTargetKind } from "./types";
 
 export interface EmitCounters {
@@ -26,18 +27,32 @@ export interface EmitCounters {
   emittedByTarget: Record<EmitTargetKind, number>;
   deliveredLocal: number;
   clusterPublished: number;
+  clusterRouted: number;
 }
 
 export interface EmitEngine {
-  emit(name: string, payload: unknown, target: EmitTarget): void;
+  emit(name: string, payload: unknown, target: EmitTarget, parentTraceId?: string): void;
 }
 
 export interface EmitterOptions {
   state: ServerState;
   bridge?: NatsBridge;
   cluster?: ClusterSync;
-  /** local sockets acting on behalf of a userId (user-target delivery) */
-  userSockets: (userId: string) => ServerWebSocket<WsData>[];
+  /**
+   * Invoke `each` for every LOCAL socket acting on behalf of `userId` and
+   * return how many were invoked. Callback-style (not array-returning) so a
+   * user-targeted emit allocates nothing on the hot path.
+   */
+  eachUserSocket: (
+    userId: string,
+    each: (ws: ServerWebSocket<WsData>) => void,
+  ) => number;
+  /**
+   * ROUTED targeted delivery: for client/user targets return the instance ids
+   * that own the destination connection(s) (presence), or null when unknown —
+   * null falls back to the full-mesh wildcard publish. Absent when no cluster.
+   */
+  routeInstances?: (target: EmitTarget) => readonly string[] | null;
   counters: EmitCounters;
 }
 
@@ -46,7 +61,7 @@ export function deliverLocal(
   state: ServerState,
   target: EmitTarget,
   frame: Uint8Array,
-  userSockets: (userId: string) => ServerWebSocket<WsData>[],
+  eachUserSocket: EmitterOptions["eachUserSocket"],
 ): number {
   switch (target.type) {
     case "broadcast": {
@@ -64,9 +79,7 @@ export function deliverLocal(
       return n;
     }
     case "user": {
-      const list = userSockets(target.userId);
-      for (const ws of list) sendFrame(state, ws, frame);
-      return list.length;
+      return eachUserSocket(target.userId, (ws) => sendFrame(state, ws, frame));
     }
     case "client": {
       const ws = state.clients.get(target.clientId);
@@ -109,19 +122,52 @@ export function createEmitter(opts: EmitterOptions): EmitEngine {
   };
 
   return {
-    emit(name, payload, target) {
+    emit(name, payload, target, parentTraceId) {
       const frame = state.transport.encodeToScratch(name, payload);
       opts.counters.emitted++;
       opts.counters.emittedByTarget[target.type]++;
-      opts.counters.deliveredLocal += deliverLocal(state, target, frame, opts.userSockets);
+      // trace first (cheap typed-array stores) so a debugger sees the event
+      // even when delivery has zero local sockets / the bridge is down.
+      state.trace.record(
+        "out.emit",
+        name,
+        target.type,
+        targetKey(target),
+        frame.byteLength,
+        state.trace.captures ? capturePayload(payload, 2000) : undefined,
+      );
+      // EXTERNAL copies (bridge / cluster envelope) come FIRST — they must see
+      // the pristine frame, before per-socket delivery-seq stamping mutates
+      // the shared scratch header below. Both copy the bytes synchronously.
       if (bridge) {
         const subject = bridgeSubject(target, name);
         if (subject) bridge.publish(subject, frame); // copies the scratch view
       }
       if (cluster) {
-        opts.counters.clusterPublished++;
-        cluster.publish(target.type, targetKey(target), name, frame);
+        const msgId = crypto.randomUUID();
+        const traceId = parentTraceId ?? "";
+        if (opts.routeInstances !== undefined && (target.type === "client" || target.type === "user")) {
+          // ROUTED targeted delivery: only the owning instances receive it
+          const instances = opts.routeInstances(target);
+          if (instances !== null) {
+            opts.counters.clusterPublished++;
+            opts.counters.clusterRouted++;
+            cluster.route(instances, target.type as "client" | "user", targetKey(target) ?? "", name, frame, {
+              msgId,
+              traceId,
+            });
+          } else {
+            // presence knows nothing — fall back to the full mesh
+            opts.counters.clusterPublished++;
+            cluster.publish(target.type, targetKey(target), name, frame, { msgId, traceId });
+          }
+        } else {
+          opts.counters.clusterPublished++;
+          cluster.publish(target.type, targetKey(target), name, frame, { msgId, traceId });
+        }
       }
+      // local delivery LAST: stamps delivery seqs into the scratch header
+      opts.counters.deliveredLocal += deliverLocal(state, target, frame, opts.eachUserSocket);
     },
   };
 }

@@ -144,6 +144,56 @@ describe("generateBindings (any schema)", () => {
   });
 });
 
+describe("generateBindings — unsupported field types fail loudly (no silent string coercion)", () => {
+  const buildWithField = (field: TSchema): (() => unknown) => () =>
+    generateBindings(
+      { events: { ev: Type.Object({ data: field }, { additionalProperties: false }) } },
+      { outDir: join(genDir, "unsupported") },
+    );
+
+  test("Type.Any() / Type.Unknown() are rejected (they used to become string fields)", () => {
+    expect(buildWithField(Type.Any())).toThrow(/field "data" in "Ev".*no FlatBuffers representation/);
+    expect(buildWithField(Type.Unknown())).toThrow(
+      /unrecognized TypeBox type \(Type\.Any\(\)\/Type\.Unknown\(\)\?\)/,
+    );
+  });
+
+  test("Type.Date() is rejected with the offending type named", () => {
+    expect(buildWithField(Type.Date())).toThrow(/unrecognized TypeBox type "Date"/);
+  });
+
+  test("Type.Record (dynamic-key object) is rejected", () => {
+    expect(buildWithField(Type.Record(Type.String(), Type.Any()))).toThrow(
+      /dynamic-key object \(Type\.Record \/ additionalProperties\)/,
+    );
+  });
+
+  test("mixed unions (number | string) are rejected — only string-literal enums and single-object unions", () => {
+    expect(buildWithField(Type.Union([Type.Number(), Type.String()]))).toThrow(
+      /union of mixed members/,
+    );
+  });
+
+  test("supported shapes still generate (string-literal enum, object|null union, nested table)", () => {
+    const ok = generateBindings(
+      {
+        events: {
+          ev: Type.Object(
+            {
+              level: Type.Union([Type.Literal("a"), Type.Literal("b")]),
+              maybe: Type.Union([Type.Object({ x: Type.String() }), Type.Null()]),
+              list: Type.Array(Type.Object({ n: Type.Number() })),
+            },
+            { additionalProperties: false },
+          ),
+        },
+      },
+      { outDir: join(genDir, "supported") },
+    );
+    expect(ok.files["backend.fbs"]).toContain("table Ev");
+  });
+});
+
 describe("in-memory bindings (custom schema)", () => {
   test("EventsOf<B> derives the plain shapes from the custom schema (compile-time)", () => {
     // The typed API (createServer / createClient with `bindings`) is what the

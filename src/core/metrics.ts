@@ -1,8 +1,11 @@
 /**
  * Server-side metrics counters — a `createMetrics()` factory returning a plain
- * counter object (no class, no `this`). Zero dependencies, no allocations in
- * the steady state (counters are plain numbers; `countPath` only allocates on
- * the first occurrence of an event name).
+ * counter object (no class, no `this`). Zero dependencies and zero allocation
+ * in the steady state (every counter is a plain number field).
+ *
+ * Per-event encode-path counts (`pathCounts`) are NOT tracked here: they live
+ * once, cumulatively, in the transport's per-event records and are derived at
+ * read time by `server.getMetrics()` — polling can never double-count.
  */
 export interface PathCounts {
   /** encodes that used the zero-alloc Rust FFI direct fast path */
@@ -30,8 +33,20 @@ export interface MetricsSnapshot {
   inboundControl: number;
   /** undecodable / version-mismatched / unknown-id frames received */
   protocolErrors: number;
+  /** inbound frames shed by the per-connection rate limiter */
+  rateLimited: number;
+  /** topic/group joins rejected by `authorizeTopic` / `authorizeGroup` */
+  rejectedJoins: number;
   bytesSent: number;
-  /** per-event encode path counts (direct vs json vs js) */
+  /** frames stamped with a per-connection delivery seq (envelope v2, resume on) */
+  stampedSeq: number;
+  /** `resume` control frames served from a connection's history ring */
+  resumesServed: number;
+  /** frames re-delivered by resume replays */
+  framesReplayed: number;
+  /** resume requests that could not fully fill the requested hole */
+  resumeMisses: number;
+  /** per-event encode path counts (derived from the transport at read time) */
   pathCounts: Record<string, PathCounts>;
   connectedClients: number;
   uptimeMs: number;
@@ -56,16 +71,17 @@ export interface Metrics {
   inbound: number;
   inboundControl: number;
   protocolErrors: number;
+  rateLimited: number;
+  rejectedJoins: number;
   bytesSent: number;
-  readonly pathCounts: Map<string, PathCounts>;
-  /** Count an encode on a given path for an event (direct = zero-alloc FFI). */
-  countPath(name: string, path: "direct" | "json" | "js"): void;
+  stampedSeq: number;
+  resumesServed: number;
+  framesReplayed: number;
+  resumeMisses: number;
   snapshot(connectedClients: number): MetricsSnapshot;
 }
 
 export function createMetrics(startedAt = Date.now()): Metrics {
-  const pathCounts = new Map<string, PathCounts>();
-
   const m: Metrics = {
     published: 0,
     sent: 0,
@@ -75,19 +91,14 @@ export function createMetrics(startedAt = Date.now()): Metrics {
     inbound: 0,
     inboundControl: 0,
     protocolErrors: 0,
+    rateLimited: 0,
+    rejectedJoins: 0,
     bytesSent: 0,
-    pathCounts,
-    countPath(name, path) {
-      let pc = pathCounts.get(name);
-      if (!pc) {
-        pc = { direct: 0, json: 0, js: 0 };
-        pathCounts.set(name, pc);
-      }
-      pc[path]++;
-    },
+    stampedSeq: 0,
+    resumesServed: 0,
+    framesReplayed: 0,
+    resumeMisses: 0,
     snapshot(connectedClients) {
-      const pathCountsObj: Record<string, PathCounts> = {};
-      for (const [name, pc] of pathCounts) pathCountsObj[name] = { ...pc };
       return {
         published: m.published,
         sent: m.sent,
@@ -97,8 +108,14 @@ export function createMetrics(startedAt = Date.now()): Metrics {
         inbound: m.inbound,
         inboundControl: m.inboundControl,
         protocolErrors: m.protocolErrors,
+        rateLimited: m.rateLimited,
+        rejectedJoins: m.rejectedJoins,
         bytesSent: m.bytesSent,
-        pathCounts: pathCountsObj,
+        stampedSeq: m.stampedSeq,
+        resumesServed: m.resumesServed,
+        framesReplayed: m.framesReplayed,
+        resumeMisses: m.resumeMisses,
+        pathCounts: {},
         connectedClients,
         uptimeMs: Date.now() - startedAt,
       };

@@ -4,12 +4,17 @@
  * (`publishToRoom` fans a frame out to every member).
  */
 import type { ServerWebSocket } from "bun";
-import { doSend, sendFrame } from "./outbound";
+import { sendFrame } from "./outbound";
 import { recordReplay, replayFrames } from "./replay";
 import type { ServerState, WsData } from "./state";
 
 /** Join `ws` to `topic`, replaying any recorded history (oldest → newest). */
 export function joinRoom(state: ServerState, ws: ServerWebSocket<WsData>, topic: string): void {
+  // every join path (control frames, programmatic, auth-seeded) is gated
+  if (state.authorizeTopic !== undefined && !state.authorizeTopic(topic, ws)) {
+    state.metrics.rejectedJoins++;
+    return;
+  }
   ws.data.topics.add(topic);
   let set = state.rooms.get(topic);
   if (!set) {
@@ -17,8 +22,10 @@ export function joinRoom(state: ServerState, ws: ServerWebSocket<WsData>, topic:
     state.rooms.set(topic, set);
   }
   set.add(ws);
-  // replay uses a direct send (not backpressure-gated) — matches the original
-  for (const frame of replayFrames(state, topic)) doSend(state, ws, frame);
+  // snapshot replay goes through the normal outbound path so (with resume
+  // enabled) the frames are stamped into this connection's seq stream and
+  // recorded in its history — clients can gap-recover across them too.
+  for (const frame of replayFrames(state, topic)) sendFrame(state, ws, frame);
 }
 
 /** Leave `topic`; prune the room when it becomes empty. */

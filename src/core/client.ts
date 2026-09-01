@@ -12,9 +12,15 @@
  */
 import type { Bindings, DefaultBindings, EventNameOf, EventsOf } from "../bindings/types";
 import { createClientState, setStatus, type ClientState, type ClientStatus, type IgnClientOptions } from "./client-state";
-import { handleMessage, sendControl, sendFrame } from "./client-wire";
+import { handleMessage, emitError, sendControl, sendFrame, flushPending } from "./client-wire";
 import { startHeartbeat, stopHeartbeat } from "./client-heartbeat";
 import { scheduleReconnect } from "./client-reconnect";
+import { failAllPending, createRpcRequest } from "./client-rpc";
+
+/** Result of a request/response round-trip. */
+export interface RpcResult<P> {
+  payload: P;
+}
 
 /** The public client API (returned by `createClient`). */
 export interface IgnClient<B extends Bindings = DefaultBindings> {
@@ -40,9 +46,21 @@ export interface IgnClient<B extends Bindings = DefaultBindings> {
   close(): void;
   /** Send a typed app event to the server (server must allow it via `inbound`). */
   send<K extends EventNameOf<B>>(name: K, payload: EventsOf<B>[K]): void;
+  /**
+   * Request/response: send `name` and await the responder's payload (encoded
+   * with the SAME event schema). Rejects on timeout (`timeoutMs`, default
+   * `requestTimeoutMs`) or when no responder is registered server-side.
+   */
+  request<K extends EventNameOf<B>>(
+    name: K,
+    payload: EventsOf<B>[K],
+    opts?: { readonly timeoutMs?: number },
+  ): Promise<RpcResult<EventsOf<B>[K]>>;
   /** Ask the server to subscribe this socket to a topic (room membership + replay). */
   subscribe(topic: string): void;
   unsubscribe(topic: string): void;
+  /** Ask the server to re-send recorded topic history strictly after `fromSeq`. */
+  snapshotRequest(topic: string, fromSeq?: number): void;
   /** Ask the server to add this socket to a server-side group. */
   joinGroup(group: string): void;
   leaveGroup(group: string): void;
@@ -59,22 +77,54 @@ export function createClient<B extends Bindings = DefaultBindings>(
   const state: ClientState = createClientState(url, opts);
 
   function connect(): IgnClient<B> {
+    // idempotent: an already-open / opening socket is never leaked or replaced
+    if (state.ws !== null) {
+      const ready = state.ws.readyState;
+      if (ready === WebSocket.OPEN || ready === WebSocket.CONNECTING) return api;
+    }
     state.closed = false;
     setStatus(state, state.attempts === 0 ? "connecting" : "reconnecting");
     const ws = new WebSocket(url);
     ws.binaryType = "arraybuffer";
+    // ownership guard: once a NEWER socket occupies `state.ws`, callbacks from
+    // this (stale) socket must not touch shared state or reschedule reconnects
+    const ownsState = (): boolean => state.ws === null || state.ws === ws;
     ws.onopen = () => {
+      if (!ownsState()) return;
       state.attempts = 0;
       setStatus(state, "connected");
-      sendControl(state, "hello", { version: state.bindings.wireVersion, caps: [], lastSeq: 0 });
+      state.resumeInFlight = false;
+      if (state.gapTimer !== null) {
+        clearTimeout(state.gapTimer);
+        state.gapTimer = null;
+      }
+      // carry the last contiguous delivery seq so a resume-capable server can
+      // re-send what this session missed (cross-session resume)
+      sendControl(state, "hello", {
+        version: state.bindings.wireVersion,
+        caps: [],
+        lastSeq: state.resume.enabled ? state.rxSeq : 0,
+      });
       // re-subscribe topics from before the disconnect (server cleared them)
       for (const t of state.subscribedTopics) sendControl(state, "subscribe", { topic: t });
       startHeartbeat(state);
     };
-    ws.onmessage = (ev) => handleMessage(state, ev.data as ArrayBuffer | string);
+    ws.onmessage = (ev) => {
+      if (!ownsState()) return;
+      handleMessage(state, ev.data as ArrayBuffer | string);
+    };
+    ws.onerror = () => {
+      // surface refused upgrades / transport failures (onclose follows and
+      // drives the reconnect state machine — no double scheduling here)
+      if (!ownsState()) return;
+      emitError(state, new Error("ignex: connection error"));
+    };
     ws.onclose = () => {
+      if (!ownsState()) return; // replaced by a newer socket — its lifecycle wins
       stopHeartbeat(state);
       state.ws = null;
+      state.resumeInFlight = false;
+      flushPending(state); // accept in-flight gap loss; hello carries rxSeq on reconnect
       if (state.closed) {
         setStatus(state, "closed");
         return;
@@ -148,12 +198,28 @@ export function createClient<B extends Bindings = DefaultBindings>(
       stopHeartbeat(state);
       if (state.reconnectTimer) clearTimeout(state.reconnectTimer);
       state.reconnectTimer = null;
+      if (state.gapTimer !== null) {
+        clearTimeout(state.gapTimer);
+        state.gapTimer = null;
+      }
+      state.pending.clear();
+      state.pendingFrom = 0;
+      failAllPending(state, new Error("ignex: client closed"));
       state.ws?.close();
       state.ws = null;
       setStatus(state, "closed");
     },
     send(name, payload) {
       sendFrame(state, state.bindings.encodeFrame(name, payload));
+    },
+    request(name, payload, opts) {
+      return createRpcRequest(
+        state,
+        name,
+        payload,
+        opts,
+        state.bindings,
+      ) as Promise<RpcResult<EventsOf<B>[typeof name]>>;
     },
     subscribe(topic) {
       state.subscribedTopics.add(topic);
@@ -162,6 +228,9 @@ export function createClient<B extends Bindings = DefaultBindings>(
     unsubscribe(topic) {
       state.subscribedTopics.delete(topic);
       sendControl(state, "unsubscribe", { topic });
+    },
+    snapshotRequest(topic, fromSeq = 0) {
+      sendControl(state, "snapshotRequest", { topic, fromSeq });
     },
     joinGroup(group) {
       sendControl(state, "joinGroup", { group });

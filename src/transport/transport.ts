@@ -14,18 +14,48 @@
  *     encoder (`bindings.encodeFrame`) — correct everywhere, slower, and the
  *     default when `ffiMode: "optional"` and no addon is available.
  *
- * `createTransport(bindings)` is a per-schema factory: it owns its own scratch +
- * stats + FFI binding, so several servers with different schemas can coexist.
- * The module-level `defaultTransport` (built-in registry, Rust required) keeps
- * the historical singleton behavior — `encodeToScratch` / `encodeEvent` /
- * `getEncodeStats` remain re-exported for backwards compatibility.
+ * ALL per-event dispatch state is resolved EAGERLY at `createTransport()`
+ * (instantiation time), not lazily on first encode: every known event name —
+ * app AND control — gets an {@link EncodeRecord} up front, holding its event
+ * id, generated encoder, NUL pre-scan and (once the addon binds) its direct
+ * FFI symbol + encode-path counters. The hot path is then one Map hit plus a
+ * couple of monomorphic field reads/increments — no lazy-init branches, no
+ * second stats Map, no per-encode counter allocation.
+ *
+ * `createTransport(bindings)` is a per-schema factory: it owns its own scratch
+ * + records + FFI binding, so several servers with different schemas can
+ * coexist. The module-level `defaultTransport` (built-in registry, Rust
+ * required) keeps the historical singleton behavior — `encodeToScratch` /
+ * `encodeEvent` / `getEncodeStats` remain re-exported for backwards compat.
  */
 
 import { defaultBindings } from "../bindings/default";
 import type { Bindings, DirectEncoder } from "../bindings/types";
 import { createFfi, type FfiDl } from "../native/ffi";
 import { createScratch, MIN_CAP } from "./scratch";
-import { createStats } from "./stats";
+
+/** Everything the hot path needs for one event — built once at instantiation. */
+interface EncodeRecord {
+  /** stable wire id (anyEventNameToId) — used by the JSON fallback */
+  readonly id: number;
+  /** generated zero-alloc encoder (absent for JSON-only events) */
+  readonly encoder: DirectEncoder | undefined;
+  /** FFI symbol name in the addon (absent when there is no direct table) */
+  readonly symName: string | undefined;
+  /** per-event NUL pre-scan (absent when the event has no string fields) */
+  readonly hasNul: ((o: unknown) => boolean) | undefined;
+  /**
+   * Resolved FFI symbol: undefined = not yet bound OR disabled/JSON-only.
+   * Flipped to a function once the addon binds; set back to undefined when a
+   * runtime failure (`ffiMode: "optional"`) permanently demotes this event to
+   * the JSON path.
+   */
+  call: ((...args: unknown[]) => number) | undefined;
+  /** encode-path counters — incremented IN PLACE on the record (no Maps) */
+  directCount: number;
+  jsonCount: number;
+  jsCount: number;
+}
 
 export interface Transport {
   /**
@@ -44,24 +74,26 @@ export interface Transport {
   };
 }
 
-/**
- * Resolved direct-path record for one event — populated lazily on first encode
- * and immutable afterwards (a direct symbol that was disabled by the bind-time
- * self-test never re-enables, so caching the resolved call is safe).
- */
-interface ResolvedDirect {
-  /** generated zero-alloc encoder (absent for JSON-only events) */
-  encoder?: DirectEncoder;
-  /** resolved FFI symbol (undefined = symbol disabled → JSON fallback) */
-  call: ((...args: unknown[]) => number) | undefined;
-  /** per-event NUL pre-scan (absent when the event has no string fields) */
-  hasNul?: (o: unknown) => boolean;
-}
-
 export function createTransport(bindings: Bindings): Transport {
   const scratch = createScratch();
-  const stats = createStats();
-  const resolvedDirect = new Map<string, ResolvedDirect>();
+
+  // ── instantiation-time resolution: one record per known event ────────────
+  const records = new Map<string, EncodeRecord>();
+  for (const name of Object.keys(bindings.anyEventNameToId)) {
+    const direct = bindings.direct;
+    const encoder = direct?.encoders[name];
+    const hasNul = direct?.hasNul[name];
+    records.set(name, {
+      id: bindings.anyEventNameToId[name] as number,
+      encoder,
+      ...(encoder !== undefined ? { symName: direct?.symbolNames[name] } : { symName: undefined }),
+      hasNul,
+      call: undefined,
+      directCount: 0,
+      jsonCount: 0,
+      jsCount: 0,
+    });
+  }
 
   // Lazily bound once: undefined = not yet resolved, null = JS-only mode,
   // FfiDl = bound addon. For ffiMode "required" the bind throws (missing /
@@ -73,77 +105,75 @@ export function createTransport(bindings: Bindings): Transport {
     return ffi;
   };
 
-  const guard = bindings.ffiMode === "optional";
-
-  function resolveDirect(name: string): ResolvedDirect {
-    let r = resolvedDirect.get(name);
-    if (r === undefined) {
-      r = { call: undefined };
-      const encoder = bindings.direct?.encoders[name];
-      if (encoder) {
-        r.encoder = encoder;
-        const dl = getFfiDl();
-        const symName = bindings.direct?.symbolNames[name];
-        r.call = dl ? dl.raw[symName ?? ""] : undefined;
-        const hasNul = bindings.direct?.hasNul[name];
-        if (hasNul !== undefined) r.hasNul = hasNul;
-      }
-      resolvedDirect.set(name, r);
+  /**
+   * Bind the addon once and fan the resolved symbols out across ALL records
+   * in a single pass — the first encode pays the dlopen + self-test, every
+   * later encode sees a plain populated field. Self-test-disabled symbols are
+   * left undefined (their events take the JSON path).
+   */
+  const bindSymbols = (): void => {
+    const dl = getFfiDl();
+    if (dl === null) return;
+    const disabled = dl.disabledDirect;
+    for (const r of records.values()) {
+      if (r.encoder === undefined || r.symName === undefined) continue;
+      if (disabled.has(r.symName)) continue;
+      const sym = dl.raw[r.symName];
+      if (sym !== undefined) r.call = sym;
     }
-    return r;
-  }
+  };
 
   function encodeToScratch(name: string, payload: unknown): Uint8Array {
-    const r = resolveDirect(name);
+    const r = records.get(name);
+    if (r === undefined) throw new Error(`ignex: unknown event "${name}"`);
     const encoder = r.encoder;
-    if (encoder && r.call) {
-      // `call` is undefined when the bind-time self-test disabled the symbol —
-      // fall through to the JSON path (graceful degradation). Embedded NULs route
-      // to JSON too: the `cstring` direct path truncates them (silent data loss),
-      // the JSON path preserves them exactly.
-      if (!(r.hasNul?.(payload) ?? false)) {
-        if (!guard) {
-          // required mode — zero-alloc hot path, no try/catch
-          scratch.grow(MIN_CAP);
-          const w = scratch.neededSize(name, encoder(r.call, payload, scratch.view), () =>
-            encoder(r.call!, payload, scratch.view),
-          );
-          stats.bump(name, "direct");
-          return scratch.view.subarray(0, w);
-        }
-        try {
-          scratch.grow(MIN_CAP);
-          const w = scratch.neededSize(name, encoder(r.call, payload, scratch.view), () =>
-            encoder(r.call!, payload, scratch.view),
-          );
-          stats.bump(name, "direct");
-          return scratch.view.subarray(0, w);
-        } catch {
-          // optional mode: a direct-call failure (e.g. ABI drift at runtime)
-          // permanently demotes this event to the JSON path.
-          r.call = undefined;
+    if (encoder !== undefined) {
+      if (r.call === undefined && ffi === undefined) bindSymbols();
+      const call = r.call;
+      if (call !== undefined) {
+        // Embedded NULs route to JSON: the `cstring` direct path truncates
+        // them (silent data loss); the JSON path preserves them exactly.
+        if (!(r.hasNul?.(payload) ?? false)) {
+          if (bindings.ffiMode !== "optional") {
+            // required mode — zero-alloc hot path, no try/catch
+            scratch.grow(MIN_CAP);
+            const w = scratch.neededSize(name, encoder(call, payload, scratch.view), () =>
+              encoder(r.call as (...args: unknown[]) => number, payload, scratch.view),
+            );
+            r.directCount++;
+            return scratch.view.subarray(0, w);
+          }
+          try {
+            scratch.grow(MIN_CAP);
+            const w = scratch.neededSize(name, encoder(call, payload, scratch.view), () =>
+              encoder(r.call as (...args: unknown[]) => number, payload, scratch.view),
+            );
+            r.directCount++;
+            return scratch.view.subarray(0, w);
+          } catch {
+            // optional mode: a direct-call failure (e.g. ABI drift at runtime)
+            // permanently demotes this event to the JSON path.
+            r.call = undefined;
+          }
         }
       }
     }
 
-    const dl = getFfiDl();
-    if (dl) {
+    const dl = ffi === undefined ? getFfiDl() : ffi;
+    if (dl !== null) {
       // JSON fallback (vector/nested events, or a disabled direct symbol).
-      const id = bindings.anyEventNameToId[name];
-      if (id === undefined) throw new Error(`ignex: unknown event "${name}"`);
       const json = JSON.stringify(payload);
-      const ffi2 = dl.bindings;
       scratch.grow(Math.max(MIN_CAP, json.length * 2 + 128));
-      const w = scratch.neededSize(name, ffi2.fb_serialize(id, json, scratch.view), () =>
-        ffi2.fb_serialize(id, json, scratch.view),
+      const w = scratch.neededSize(name, dl.bindings.fb_serialize(r.id, json, scratch.view), () =>
+        dl.bindings.fb_serialize(r.id, json, scratch.view),
       );
-      stats.bump(name, "json");
+      r.jsonCount++;
       return scratch.view.subarray(0, w);
     }
 
     // JS-only mode (user schema, no native addon) — the pure-JS encoder.
     const frame = bindings.encodeFrame(name, payload);
-    stats.bump(name, "js");
+    r.jsCount++;
     return frame;
   }
 
@@ -157,7 +187,17 @@ export function createTransport(bindings: Bindings): Transport {
   return {
     encodeToScratch,
     encodeEvent,
-    getEncodeStats: () => stats.get(),
+    getEncodeStats() {
+      const direct: Record<string, number> = {};
+      const json: Record<string, number> = {};
+      const js: Record<string, number> = {};
+      for (const [name, r] of records) {
+        if (r.directCount > 0) direct[name] = r.directCount;
+        if (r.jsonCount > 0) json[name] = r.jsonCount;
+        if (r.jsCount > 0) js[name] = r.jsCount;
+      }
+      return { direct, json, js };
+    },
   };
 }
 

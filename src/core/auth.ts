@@ -7,8 +7,63 @@
  * `authenticate` may return a `ClientMeta` (`{id, groups, meta}`) to pin the
  * client's identity for targeted sends / grouping; otherwise a UUID is
  * auto-assigned. A duplicate explicit id rejects the new connection (409).
+ *
+ * Literal bearer tokens are compared in CONSTANT TIME (no length or prefix
+ * oracle for a brute-forcing caller). The same gate protects the HTTP admin
+ * surface (`GET /clients`) via `authorizeHttp` — introspection endpoints must
+ * never be wider than the WebSocket they introspect.
  */
+import { timingSafeEqual } from "node:crypto";
 import type { ClientMeta, ServerState, WsData } from "./state";
+
+/** Constant-time string equality (UTF-8 compared; length-safe). */
+export function safeEqual(a: string, b: string): boolean {
+  const ab = Buffer.from(a, "utf8");
+  const bb = Buffer.from(b, "utf8");
+  if (ab.byteLength !== bb.byteLength) {
+    // burn comparable time so mismatched-length guesses aren't cheaper
+    timingSafeEqual(ab, ab);
+    return false;
+  }
+  return timingSafeEqual(ab, bb);
+}
+
+/** Evaluate the server's token gate against a raw Bearer value. */
+export function tokenOk(state: ServerState, bearer: string): boolean {
+  if (state.token === undefined) return true;
+  return typeof state.token === "function" ? state.token(bearer) : safeEqual(bearer, state.token);
+}
+
+function bearerOf(req: Request): string {
+  const auth = req.headers.get("authorization") ?? "";
+  return auth.startsWith("Bearer ") ? auth.slice("Bearer ".length) : "";
+}
+
+/**
+ * HTTP admin gate (defense-in-depth for non-WebSocket routes): when a `token`
+ * is configured the request MUST carry a valid Bearer; otherwise, when an
+ * `authenticate` hook exists it must accept the request. Unauthenticated
+ * servers stay unauthenticated (documented dev behavior).
+ */
+export async function authorizeHttp(
+  state: ServerState,
+  req: Request,
+): Promise<Response | undefined> {
+  if (state.token !== undefined || state.authenticate !== undefined) {
+    if (!tokenOk(state, bearerOf(req))) return new Response("unauthorized", { status: 401 });
+    if (state.token === undefined && state.authenticate !== undefined) {
+      // a failing auth backend must deny, not blow up the serve loop
+      let allowed: unknown;
+      try {
+        allowed = await state.authenticate(req);
+      } catch {
+        return new Response("unauthorized", { status: 401 });
+      }
+      if (!allowed) return new Response("unauthorized", { status: 401 });
+    }
+  }
+  return undefined;
+}
 
 export async function checkUpgrade(
   state: ServerState,
@@ -25,14 +80,19 @@ export async function checkUpgrade(
     }
   }
   if (state.token) {
-    const auth = req.headers.get("authorization") ?? "";
-    const bearer = auth.startsWith("Bearer ") ? auth.slice("Bearer ".length) : "";
-    const ok = typeof state.token === "function" ? state.token(bearer) : bearer === state.token;
+    const ok = tokenOk(state, bearerOf(req));
     if (!ok) return new Response("unauthorized", { status: 401 });
   }
   let authMeta: ClientMeta | undefined;
   if (state.authenticate) {
-    const res = await state.authenticate(req);
+    // a throwing / rejecting hook denies the upgrade cleanly (401) instead of
+    // surfacing an unhandled error through Bun.serve's fetch loop
+    let res: Awaited<ReturnType<typeof state.authenticate>>;
+    try {
+      res = await state.authenticate(req);
+    } catch {
+      return new Response("unauthorized", { status: 401 });
+    }
     if (!res) return new Response("unauthorized", { status: 401 });
     if (typeof res === "object") authMeta = res;
   }
@@ -44,6 +104,7 @@ export async function checkUpgrade(
   }
   const data: WsData = {
     lastSeq: 0,
+    sendSeq: 1,
     topics: new Set(),
     groups: new Set(authMeta?.groups ?? []),
     id,

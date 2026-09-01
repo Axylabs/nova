@@ -412,6 +412,10 @@ function emitDirectFn(m: Model, ev: EventDef): string {
     `                    *out.add(0) = WIRE_VERSION;`,
     `                    let id_bytes = ${id}u32.to_le_bytes();`,
     `                    std::ptr::copy_nonoverlapping(id_bytes.as_ptr(), out.add(1), 4);`,
+    `                    // [flags:1][seq:u64 LE] — pristine (flags=0, seq=0); the`,
+    `                    // server stamps per-destination delivery seqs on send.`,
+    `                    *out.add(5) = 0;`,
+    `                    std::ptr::write_bytes(out.add(6), 0, 8);`,
     `                }`,
     `                needed`,
     `            }`,
@@ -447,7 +451,7 @@ export function emitRustGlue(m: Model, fingerprint: number): string {
   lines.push("");
   lines.push(`pub const WIRE_VERSION: u8 = ${WIRE_VERSION};`);
   lines.push(
-    `pub const WIRE_HEADER_LEN: usize = ${WIRE_HEADER_LEN}; // [version:1][event_id:u32 LE]`,
+    `pub const WIRE_HEADER_LEN: usize = ${WIRE_HEADER_LEN}; // [version:1][event_id:u32 LE][flags:1][seq:u64 LE]`,
   );
   lines.push(`pub const SCHEMA_FINGERPRINT: u64 = ${fingerprint}; // fnv1a32(canonical model)`);
   lines.push("");

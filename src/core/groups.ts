@@ -14,6 +14,11 @@ import type { ServerState, WsData } from "./state";
 
 /** Add `ws` to `group` (idempotent) and index it in `state.groups`. */
 export function joinGroup(state: ServerState, ws: ServerWebSocket<WsData>, group: string): void {
+  // every join path (control frames, programmatic, auth-seeded) is gated
+  if (state.authorizeGroup !== undefined && !state.authorizeGroup(group, ws)) {
+    state.metrics.rejectedJoins++;
+    return;
+  }
   ws.data.groups.add(group);
   let set = state.groups.get(group);
   if (!set) {

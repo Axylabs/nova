@@ -183,13 +183,53 @@ export const JoinGroup = Type.Object({ group: Type.String() }, { additionalPrope
 export const LeaveGroup = Type.Object({ group: Type.String() }, { additionalProperties: false });
 
 export const SnapshotRequest = Type.Object(
-  { topic: Type.String() },
+  {
+    topic: Type.String(),
+    /**
+     * Resume point: serve recorded history STRICTLY AFTER this topic seq
+     * (0 = from the beginning of retained history — the v1 behavior).
+     */
+    fromSeq: Type.Integer(),
+  },
   { additionalProperties: false },
 );
 
 export const Ping = Type.Object({ ts: Type.Integer() }, { additionalProperties: false });
 
 export const Pong = Type.Object({ ts: Type.Integer() }, { additionalProperties: false });
+
+/**
+ * Client → server: resume missed delivery-seq frames after a gap or
+ * reconnect. The server replays everything it still holds strictly after
+ * `lastSeq` from the per-connection history ring, prefixed by a `resumed`
+ * control frame (`ok:false` when the hole is older than the ring).
+ */
+export const Resume = Type.Object(
+  { lastSeq: Type.Integer() }, // last CONTIGUOUS delivery seq the client has
+  { additionalProperties: false },
+);
+
+/** Server → client: ack before replayed frames (`ok:false` → resubscribe topics). */
+export const Resumed = Type.Object(
+  { ok: Type.Boolean(), from: Type.Integer() }, // first seq being replayed
+  { additionalProperties: false },
+);
+
+/**
+ * Request/response over the event wire (correlation id + timeout live on the
+ * caller side). `name` is the app-event name being requested; `payload` is the
+ * base64 of a full wire frame encoded with that same event's schema — the
+ * response reuses the SAME event schema both directions.
+ */
+export const RpcCall = Type.Object(
+  { id: Type.String(), name: Type.String(), payloadB64: Type.String() },
+  { additionalProperties: false },
+);
+
+export const RpcResult = Type.Object(
+  { id: Type.String(), ok: Type.Boolean(), err: Type.String(), payloadB64: Type.String() },
+  { additionalProperties: false },
+);
 
 /** Server→client identity assignment (sent right after `hello` on open). */
 export const Welcome = Type.Object(
@@ -211,6 +251,10 @@ export const controlEvents = {
   snapshotRequest: SnapshotRequest,
   ping: Ping,
   pong: Pong,
+  resume: Resume,
+  resumed: Resumed,
+  rpcCall: RpcCall,
+  rpcResult: RpcResult,
 } as const;
 
 export type EventName = keyof typeof events;

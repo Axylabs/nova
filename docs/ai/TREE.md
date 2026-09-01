@@ -5,10 +5,10 @@
 > curated maps live in `docs/architecture.md` + `docs/wire-format.md`
 > (and `AGENTS.md` for agents).
 
-- package: `@ignex/nova` v0.1.1
+- package: `@ignex/nova` v0.1.3
 - engines: {"bun":">=1.4"}
 - rust crate: `ignex-nova-ffi` v0.1.0
-- scripts (19): `generate`, `build:rust`, `build:client`, `build:dist`, `build`, `prebuild`, `test`, `lint`, `typecheck`, `verify`, `pack:check`, `gen:ai-map`, …
+- scripts (20): `generate`, `build:rust`, `build:client`, `build:dist`, `build`, `prebuild`, `test`, `lint`, `typecheck`, `verify`, `pack:check`, `gen:ai-map`, …
 
 ## src/
 
@@ -19,7 +19,11 @@ src/
 │  ├─ default.ts
 │  └─ types.ts
 ├─ bridge/
-│  ├─ nats.ts
+│  ├─ nats/
+│  │  ├─ inbound.ts
+│  │  ├─ index.ts
+│  │  ├─ real-transport.ts
+│  │  └─ types.ts
 │  └─ subjects.ts
 ├─ codegen/
 │  ├─ constants.ts
@@ -32,10 +36,17 @@ src/
 │  ├─ ts-ser-gen.ts
 │  └─ typebox-to-fbs.ts
 ├─ core/
+│  ├─ server/
+│  │  ├─ client-info.ts
+│  │  ├─ http-routes.ts
+│  │  ├─ index.ts
+│  │  ├─ metrics-view.ts
+│  │  └─ socket-lifecycle.ts
 │  ├─ auth.ts
 │  ├─ backpressure.ts
 │  ├─ client-heartbeat.ts
 │  ├─ client-reconnect.ts
+│  ├─ client-rpc.ts
 │  ├─ client-state.ts
 │  ├─ client-wire.ts
 │  ├─ client.ts
@@ -43,24 +54,59 @@ src/
 │  ├─ int64-guard.ts
 │  ├─ metrics.ts
 │  ├─ outbound.ts
+│  ├─ rate-limit.ts
 │  ├─ replay.ts
+│  ├─ resume.ts
 │  ├─ ring.ts
 │  ├─ rooms.ts
 │  ├─ routing.ts
-│  ├─ server.ts
-│  └─ state.ts
+│  ├─ state.ts
+│  └─ topic-log.ts
 ├─ events/
+│  ├─ cluster/
+│  │  ├─ dedupe.ts
+│  │  ├─ envelope.ts
+│  │  ├─ index.ts
+│  │  ├─ keys.ts
+│  │  ├─ kinds.ts
+│  │  ├─ presence-table.ts
+│  │  ├─ presence.ts
+│  │  ├─ redis-client.ts
+│  │  ├─ store-memory.ts
+│  │  ├─ store-redis.ts
+│  │  ├─ subjects.ts
+│  │  ├─ sync.ts
+│  │  ├─ transport-nats.ts
+│  │  └─ transport-redis.ts
+│  ├─ hub/
+│  │  ├─ context-factory.ts
+│  │  ├─ dispatch.ts
+│  │  ├─ index.ts
+│  │  ├─ internal.ts
+│  │  ├─ metrics-snapshot.ts
+│  │  └─ resolve-cluster.ts
+│  ├─ types/
+│  │  ├─ client.ts
+│  │  ├─ cluster.ts
+│  │  ├─ context.ts
+│  │  ├─ emit-target.ts
+│  │  ├─ groups.ts
+│  │  ├─ hub.ts
+│  │  ├─ index.ts
+│  │  ├─ metrics.ts
+│  │  └─ options.ts
 │  ├─ clients.ts
-│  ├─ cluster.ts
+│  ├─ cluster-rpc.ts
 │  ├─ data.ts
+│  ├─ delivery.ts
 │  ├─ emit.ts
 │  ├─ global.ts
 │  ├─ groups.ts
-│  ├─ hub.ts
 │  ├─ index.ts
 │  ├─ queue.ts
 │  ├─ registry.ts
-│  └─ types.ts
+│  ├─ schedule.ts
+│  └─ trace.ts
 ├─ generated/
 │  ├─ fbs/
 │  │  └─ backend.fbs
@@ -82,6 +128,10 @@ src/
 │  │  ├─ portfolio-position.ts
 │  │  ├─ portfolio-snapshot.ts
 │  │  ├─ quote.ts
+│  │  ├─ resume.ts
+│  │  ├─ resumed.ts
+│  │  ├─ rpc-call.ts
+│  │  ├─ rpc-result.ts
 │  │  ├─ side.ts
 │  │  ├─ snapshot-request.ts
 │  │  ├─ subscribe.ts
@@ -102,7 +152,6 @@ src/
 ├─ transport/
 │  ├─ byte-buffer-pool.ts
 │  ├─ scratch.ts
-│  ├─ stats.ts
 │  └─ transport.ts
 └─ server.ts
 ```
@@ -158,8 +207,11 @@ test/
 ├─ bidirectional.test.ts
 ├─ bindings-gen.test.ts
 ├─ byte-buffer-pool.test.ts
+├─ cluster-v2.test.ts
+├─ data-integrity-edge.test.ts
 ├─ direct.test.ts
 ├─ e2e.test.ts
+├─ efficiency.test.ts
 ├─ events-cluster.test.ts
 ├─ events.test.ts
 ├─ ffi.test.ts
@@ -171,12 +223,19 @@ test/
 ├─ metrics.test.ts
 ├─ nats-bridge.test.ts
 ├─ nats-integration.test.ts
+├─ performance.test.ts
 ├─ reconnect.test.ts
+├─ resume.test.ts
 ├─ ring.test.ts
 ├─ rooms.test.ts
 ├─ roundtrip.test.ts
+├─ rpc.test.ts
+├─ security-hardening.test.ts
+├─ security-live-fuzz.test.ts
 ├─ security.test.ts
+├─ stability-resilience.test.ts
 ├─ targeting.test.ts
+├─ trace.test.ts
 └─ wire.test.ts
 ```
 
@@ -185,6 +244,7 @@ test/
 ```
 bench/
 ├─ BASELINE.md
+├─ dispatch.ts
 ├─ ffi-margin.ts
 ├─ measure.ts
 ├─ serialize.ts

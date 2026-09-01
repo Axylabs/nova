@@ -72,6 +72,7 @@
     "gen:ai-map": "bun scripts/gen-ai-map.ts",
     "serve": "bun run src/server.ts",
     "bench:serialize": "bun run bench/serialize.ts",
+    "bench:dispatch": "bun run bench/dispatch.ts",
     "bench:throughput": "bun run bench/throughput.ts",
     "release": "bun scripts/release.ts",
     "release:dry": "bun scripts/release.ts --dry-run",

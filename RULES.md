@@ -46,7 +46,7 @@ task-specific runbooks; `docs/ai/LOCAL_DEV.md` covers cross-repo local dev.
 ## 4. Functional composition — pure functions, no classes
 
 - Public API = **functional composition over an explicit state object**:
-  composition roots `src/core/server.ts` + `src/core/client.ts`; action
+  composition roots `src/core/server/` + `src/core/client.ts`; action
   modules (`auth`, `rooms`, `replay`, `groups`, `backpressure`, `outbound`,
   `routing`, client-*) are pure-ish `(state, …) => …` functions; factories
   (`createMetrics`, `createScratch`, `createStats`) own encapsulated state.
@@ -68,11 +68,12 @@ task-specific runbooks; `docs/ai/LOCAL_DEV.md` covers cross-repo local dev.
 
 ## 6. Tests ship with code
 
-- `bun test` (~202 cases across 25 files): api, auth, backpressure,
-  bidirectional, bindings-gen, byte-buffer-pool, direct, e2e, events,
-  events-cluster, ffi, groups, int64, integrity, loader, metrics,
-  nats-bridge, nats-integration (opt-in via `NATS_URL`), reconnect, ring,
-  rooms, roundtrip, security, targeting, wire.
+- `bun test` (~234 cases across 29 files): api, auth, backpressure,
+  bidirectional, bindings-gen, byte-buffer-pool, direct, e2e, efficiency,
+  events, events-cluster, ffi, groups, int64, integrity, loader, metrics,
+  nats-bridge, nats-integration (opt-in via `NATS_URL`), performance,
+  reconnect, ring, rooms, roundtrip, security, security-hardening, targeting,
+  trace, wire.
 - FFI-backed paths need `bun run generate` + `cargo build --release` first.
 - Perf-sensitive changes: re-run `bench:serialize` + `bench:throughput`.
 

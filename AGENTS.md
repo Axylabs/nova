@@ -35,7 +35,7 @@ NATS bridge (`src/bridge/`) and events layer (`src/events/`).
 | Build Rust cdylib (release) | `bun run build:rust` (`cargo build --release --manifest-path rust/Cargo.toml`) |
 | Stage addon into `prebuilds/` | `bun run prebuild` |
 | Full build | `bun run build` (generate + build:rust + build:client) |
-| Tests | `bun test` (~202 cases, 25 files; NATS integration opt-in via `NATS_URL`) |
+| Tests | `bun test` (~234 cases, 29 files; NATS integration opt-in via `NATS_URL`) |
 | Lint (oxlint, FP rules) | `bun run lint` |
 | Typecheck | `bun run typecheck` (`tsc --noEmit -p tsconfig.json`) |
 | Verify all | `bun run verify` (typecheck + lint + test) |
@@ -59,12 +59,13 @@ src/
   bindings/            Bindings contract + assemble + default (built-in registry)
   native/              the only Rust-touching code: ffi.ts (dlopen map + self-tests),
                        loader.ts (IGNEX_FFI_PATH → rust/target/release → prebuilds/), codec.ts
-  core/                composition roots server.ts + client.ts; action modules
+  core/                composition roots server/ + client.ts; action modules
                        (state, auth, rooms, ring, replay, groups, backpressure, outbound,
-                       routing, metrics, int64-guard; client-state/-wire/-reconnect/-heartbeat)
+                       routing, metrics, int64-guard, client-state/-wire/-reconnect/-heartbeat/-rpc)
   transport/           encodeToScratch (direct/JSON/JS), scratch, stats, byte-buffer-pool
-  bridge/              optional NATS (nats.ts, subjects.ts)
-  events/              opt-in events layer (hub, registry, clients, cluster, queue, global)
+  bridge/              optional NATS (nats/ = types, real-transport, inbound; subjects.ts)
+  events/              opt-in events layer (hub/, registry, clients, cluster/,
+                       queue, global, types/, delivery, schedule)
   server.ts            runnable demo (serve /ws, /health, static demo)
 rust/
   src/ffi.rs           hand-written C-ABI: fb_probe (0x49474e58 "IGNX"), fb_wire_version,

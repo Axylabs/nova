@@ -32,6 +32,16 @@ export interface IgnClientOptions<B extends Bindings = DefaultBindings> {
   heartbeatMs?: number;
   /** miss this many heartbeats before assuming the connection is dead, default 2 */
   heartbeatMisses?: number;
+  /**
+   * Gap-free delivery (requires the server started with `resume`): track the
+   * server's per-connection delivery seqs, detect gaps, and automatically
+   * request re-delivery via the `resume` control frame. Buffered out-of-order
+   * frames are bounded by `maxPending`. Default: true (no-op against servers
+   * that don't stamp seqs).
+   */
+  resume?: boolean | { maxPending?: number; timeoutMs?: number };
+  /** request/response default timeout (ms), default 10_000 */
+  requestTimeoutMs?: number;
 }
 
 export interface ClientState {
@@ -55,6 +65,24 @@ export interface ClientState {
   clientId: string;
   /** server-side groups this client belongs to (from `welcome`; [] until known) */
   groups: string[];
+
+  // ── delivery-seq tracking / gap recovery (envelope v2) ──────────────────
+  /** resolved resume options (enabled: false when off) */
+  resume: { enabled: boolean; maxPending: number; timeoutMs: number };
+  /** last CONTIGUOUS delivery seq processed (0 = none yet) */
+  rxSeq: number;
+  /** frames held out-of-order while a gap is being filled (seq → frame bytes) */
+  pending: Map<number, Uint8Array[]>;
+  /** seq the pending buffer is waiting to fill from */
+  pendingFrom: number;
+  /** in-flight resume request flag (throttles re-asks) */
+  resumeInFlight: boolean;
+  /** force-flush timer for an unfillable gap */
+  gapTimer: ReturnType<typeof setTimeout> | null;
+  /** request/response: correlation id → pending call */
+  rpcPending: Map<string, { resolve: (payload: unknown) => void; reject: (err: Error) => void; timer: ReturnType<typeof setTimeout>; name: string }>;
+  /** default request timeout (ms) */
+  requestTimeoutMs: number;
 }
 
 export function createClientState<B extends Bindings = DefaultBindings>(
@@ -79,6 +107,20 @@ export function createClientState<B extends Bindings = DefaultBindings>(
     lastPong: 0,
     clientId: "",
     groups: [],
+    resume: {
+      enabled: opts.resume !== false,
+      maxPending:
+        (typeof opts.resume === "object" ? opts.resume.maxPending : undefined) ?? 1024,
+      timeoutMs:
+        (typeof opts.resume === "object" ? opts.resume.timeoutMs : undefined) ?? 5_000,
+    },
+    rxSeq: 0,
+    pending: new Map(),
+    pendingFrom: 0,
+    resumeInFlight: false,
+    gapTimer: null,
+    rpcPending: new Map(),
+    requestTimeoutMs: opts.requestTimeoutMs ?? 10_000,
   };
 }
 

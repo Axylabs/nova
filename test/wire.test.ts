@@ -76,7 +76,7 @@ describe("frame envelope layout", () => {
 
   test("version-mismatched frames are rejected with null", () => {
     const frame = encodeEvent("quote", quote());
-    for (const v of [0, 2, 3, 0xff]) {
+    for (const v of [0, WIRE_VERSION + 1, 3, 0xff]) {
       const f = frame.slice();
       f[0] = v;
       expect(decodeFrame(f)).toBeNull();

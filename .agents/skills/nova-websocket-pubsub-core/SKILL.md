@@ -11,11 +11,14 @@ documents this; the FP lint rules in `.oxlintrc.json` enforce it.
 
 ## Composition roots
 
-- `src/core/server.ts` — `createServer(options)`: the ONLY place that knows
+- `src/core/server/` — `createServer(options)`: the ONLY place that knows
   how the pieces fit together. Builds `ServerState`, wires `Bun.serve`,
-  returns a plain API object.
+  returns a plain API object. Decomposed: `client-info.ts` (pure
+  introspection mapper), `http-routes.ts` (fetch handler),
+  `socket-lifecycle.ts` (open/close `(state, ws)` actions), `metrics-view.ts`
+  (pure snapshot assembly).
 - `src/core/client.ts` — `createClient(url, opts)`: builds client state,
-  returns a plain API object with closures.
+  returns a plain API object with closures; rpc plumbing in `client-rpc.ts`.
 - `public/*.ts` are thin re-export shims keeping the npm subpaths
   (`@ignex/nova/server`, `/client`, `/nats`, `/events`, `/bindings`,
   `/generate`, `/internal`) and the `dist` build stable — edit `src/core`,
@@ -25,7 +28,8 @@ documents this; the FP lint rules in `.oxlintrc.json` enforce it.
 
 | Module | Responsibility |
 | --- | --- |
-| `src/core/auth.ts` | Upgrade gate (authenticate hook, token, origin, maxConnections) |
+| `src/core/auth.ts` | Upgrade gate (authenticate hook, token, origin, maxConnections) + HTTP admin gate + timing-safe token compare |
+| `src/core/rate-limit.ts` | Per-connection inbound token bucket (`options.rateLimit`, default off) |
 | `src/core/rooms.ts` + `ring.ts` | Membership + fan-out; per-topic bounded replay ring |
 | `src/core/replay.ts` | Per-topic history snapshot on subscribe |
 | `src/core/groups.ts` | Server-side targeting sets (no replay) |
@@ -67,5 +71,6 @@ All names are typed via `EventNameOf<B>` from the bindings.
 ## Verify
 
 - `bun test` (auth, backpressure, rooms, groups, replay, ring, targeting,
-  security, bidirectional, e2e suites; NATS integration opt-in via `NATS_URL`).
+  security, security-hardening, performance, efficiency, bidirectional, e2e
+  suites; NATS integration opt-in via `NATS_URL`).
 - `bun run verify` (typecheck + lint + test) before pushing.

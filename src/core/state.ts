@@ -10,9 +10,11 @@ import type { ServerWebSocket } from "bun";
 import { defaultBindings } from "../bindings/default";
 import type { Bindings, DefaultBindings, EventNameOf } from "../bindings/types";
 import type { NatsBridge, NatsBridgeOptions } from "../bridge/nats";
+import { createEventTrace, type EventTrace, type EventTraceOptions } from "../events/trace";
 import { createTransport, defaultTransport, type Transport } from "../transport/transport";
 import type { Int64GuardMode } from "./int64-guard";
 import { createMetrics, type Metrics } from "./metrics";
+import { resolveRateLimit, type RateLimitOptions, type ResolvedRateLimit } from "./rate-limit";
 import type { RingBuffer } from "./ring";
 
 /**
@@ -57,6 +59,15 @@ export interface WsData {
   connectedAt: number;
   /** drop-oldest backpressure queue (only non-empty while the socket is saturated) */
   queue?: RingBuffer<Uint8Array>;
+  /** per-connection inbound rate limiter (lazily created on first frame) */
+  rate?: import("./rate-limit").RateLimiter;
+  /**
+   * Next per-connection delivery seq to stamp (envelope v2). Starts at 1;
+   * continues a previous session's stream when a grave is adopted.
+   */
+  sendSeq: number;
+  /** bounded sent-frame history for gap recovery (lazily created, resume only) */
+  history?: import("./ring").RingBuffer<import("./resume").SentFrame>;
 }
 
 /** Slow-consumer policy (see `IgnBackpressureOptions`). */
@@ -98,8 +109,22 @@ export interface IgnServerOptions<B extends Bindings = DefaultBindings> {
    */
   replay?: { historySize?: number };
   /**
+   * Gap-free delivery (envelope v2 seq + resume). When set, every frame sent
+   * to a socket carries a per-connection delivery seq, the connection keeps a
+   * bounded sent-history ring, and closed sessions park that ring in a
+   * per-client-id graveyard so reconnects can resume missed frames.
+   */
+  resume?: { historySize?: number; ttlMs?: number };
+  /**
+   * Durable topic log behind the replay ring (`src/core/topic-log.ts`). When
+   * set, every recorded topic frame is appended and `snapshotRequest`s older
+   * than the ring hydrate from the log. Default: none (ring-only).
+   */
+  topicLog?: import("./topic-log").TopicLog;
+  /**
    * Async auth hook run BEFORE the WebSocket upgrade. Return `false` to reject
-   * the connection (401). Return `true` to allow it (client gets an auto-
+   * the connection (401) — a hook that throws (or rejects) denies it too.
+   * Return `true` to allow it (client gets an auto-
    * generated id), or a `ClientMeta` object to pin the client id / seed its
    * server-side groups / attach metadata. Inspect `req` as needed.
    */
@@ -115,6 +140,22 @@ export interface IgnServerOptions<B extends Bindings = DefaultBindings> {
   maxConnections?: number;
   /** maximum inbound frame size in bytes (close 1009 beyond) */
   maxMessageSize?: number;
+  /**
+   * Per-connection inbound rate limiting (token bucket over ALL frames — app
+   * AND control). Default: off (zero hot-path overhead). Over-limit frames are
+   * dropped (default) or the socket is closed (`policy: "close"`, code 1008);
+   * either way the event is counted in `metrics.rateLimited`.
+   */
+  rateLimit?: RateLimitOptions;
+  /**
+   * Authorize a client's topic (room) join — enforced for EVERY join path:
+   * `subscribe` control frames, programmatic `server.join`, and auth-seeded
+   * topics. Return false to reject (the frame/ call is ignored and counted in
+   * `metrics.rejectedJoins`). Default: allow all.
+   */
+  authorizeTopic?: (topic: string, ws: ServerWebSocket<WsData>) => boolean;
+  /** Authorize a server-side group join (same contract as `authorizeTopic`). */
+  authorizeGroup?: (group: string, ws: ServerWebSocket<WsData>) => boolean;
   /**
    * Lossless-int64 guard for plain `number` int64 fields: values outside the
    * safe-integer range (±2^53-1) throw / warn at encode time (default "off" —
@@ -141,6 +182,13 @@ export interface IgnServerOptions<B extends Bindings = DefaultBindings> {
    * (`ignex-nova/events`) is bound by default.
    */
   events?: import("../events/types").EventsOptions<B>;
+  /**
+   * Event trace ring — records every fired event (emitted / published /
+   * received) into a pre-allocated structure-of-arrays buffer so a debugger
+   * (ignex debugbar, MCP) can see what fired without any hot-path allocation.
+   * Default: on with capacity 1024; `IGNEX_NOVA_TRACE=0` disables globally.
+   */
+  trace?: EventTraceOptions;
   /** additional HTTP handler for non-ws routes (e.g. serving a static demo page) */
   fetch?: (req: Request) => Response | Promise<Response>;
 }
@@ -163,7 +211,11 @@ export interface ServerState {
   token?: string | ((token: string) => boolean);
   maxConnections?: number;
   maxMessageSize?: number;
+  rateLimit: ResolvedRateLimit | null;
+  authorizeTopic?: (topic: string, ws: ServerWebSocket<WsData>) => boolean;
+  authorizeGroup?: (group: string, ws: ServerWebSocket<WsData>) => boolean;
   replay: { historySize: number } | null;
+  resume: { historySize: number; ttlMs: number } | null;
   sockets: Set<ServerWebSocket<WsData>>;
   /** id → live socket (client registry for targeted sends / introspection) */
   clients: Map<string, ServerWebSocket<WsData>>;
@@ -175,11 +227,23 @@ export interface ServerState {
   inboundHandlers: Map<string, InboundHandler>;
   topicHistory: Map<string, RingBuffer<{ seq: number; frame: Uint8Array }>>;
   replaySeq: number;
+  /** optional durable topic log (wired in createServer when `options.topicLog` is set) */
+  topicLog?: import("./topic-log").TopicLog;
+  /**
+   * Responder registry for request/response (`rpcCall` control frames):
+   * inner event name → async responder. Registered via `server.handle` /
+   * `hub.onRequest`.
+   */
+  rpcHandlers: Map<string, (payload: unknown, ws: ServerWebSocket<WsData>) => Promise<unknown>>;
+  /** parked sent-history rings of closed sessions (cross-connection resume) */
+  graves: Map<string, { history: RingBuffer<import("./resume").SentFrame>; nextSeq: number; expiresAt: number }>;
   /** events-layer lifecycle hooks (wired by createServer when `events` is set) */
   onConnect?: (ws: ServerWebSocket<WsData>) => void;
   onDisconnect?: (ws: ServerWebSocket<WsData>) => void;
   /** fired on ANY group membership change (auth seed, control frames, programmatic) */
   onGroupChange?: (group: string, ws: ServerWebSocket<WsData>, joined: boolean) => void;
+  /** event trace ring (debugger visibility; pre-allocated, zero-GC writes) */
+  trace: EventTrace;
 }
 
 export function createServerState<B extends Bindings = DefaultBindings>(
@@ -205,7 +269,12 @@ export function createServerState<B extends Bindings = DefaultBindings>(
     ...(options.token !== undefined ? { token: options.token } : {}),
     ...(options.maxConnections !== undefined ? { maxConnections: options.maxConnections } : {}),
     ...(options.maxMessageSize !== undefined ? { maxMessageSize: options.maxMessageSize } : {}),
+    rateLimit: resolveRateLimit(options.rateLimit),
+    ...(options.authorizeTopic !== undefined ? { authorizeTopic: options.authorizeTopic } : {}),
+    ...(options.authorizeGroup !== undefined ? { authorizeGroup: options.authorizeGroup } : {}),
+    ...(options.topicLog !== undefined ? { topicLog: options.topicLog } : {}),
     replay: options.replay ? { historySize: options.replay.historySize ?? 64 } : null,
+    resume: options.resume ? { historySize: options.resume.historySize ?? 256, ttlMs: options.resume.ttlMs ?? 60_000 } : null,
     sockets: new Set(),
     clients: new Map(),
     rooms: new Map(),
@@ -213,5 +282,8 @@ export function createServerState<B extends Bindings = DefaultBindings>(
     inboundHandlers: new Map(),
     topicHistory: new Map(),
     replaySeq: 0,
+    rpcHandlers: new Map(),
+    graves: new Map(),
+    trace: createEventTrace(options.trace),
   };
 }

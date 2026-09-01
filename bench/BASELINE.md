@@ -42,3 +42,41 @@ client received: 20000/20000
 | portfolio (packed vector) | 945.0 ns | > ~992 ns |
 | LARGE (200 positions) | 27082.0 ns | > ~28436 ns |
 | throughput | 1,090,129 msg/s | < ~1.04M msg/s |
+
+## `bun run bench:dispatch` (added 2026-08-24)
+
+A/B of pre-optimization replicas vs current code on the per-message JS paths
+(inbound dispatch, context creation, user-target delivery) — the paths
+`bench:serialize`/`bench:throughput` never exercise. Two metrics: min-of-N
+batched ns/op (FTL best case) and sustained ops/sec over a fixed window with
+GC running inside the measurement (where per-event garbage actually bills).
+
+Recorded on the same machine as the original baseline, Bun 1.4.1:
+
+```
+1. inbound dispatch (3 handlers + onAny)
+   min/op   old 72.3 ns · new 62.7 ns (1.15× faster best-case)
+   sustained old 6.5M ops/s · new 13.1M ops/s (+100% incl. GC)
+
+2. user-targeted delivery bookkeeping (4 sockets / 10k clients)
+   min/op   old 49.2 ns · new 42.9 ns (1.15× faster best-case)
+   sustained old 15.0M ops/s · new 22.3M ops/s (+49% incl. GC)
+
+3. event-trace record (debugger visibility added to every event)
+   min/op   on 42.9 ns · off 10.5 ns
+   sustained on 23.0M rec/s
+
+4. payload preview capture (opt-in): ~120 ns/event — off by default
+```
+
+JSC tier ladder for the new dispatch path (stability probe, 6 windows after
+2M-op warm): FTL ≈ 55M ops/s steady → DFG-only ≈ 9.4M → LLInt ≈ 1.6M — a
+smooth monotonic ladder with no cliffs or oscillation between windows, i.e.
+no deopt/reopt pathology; the hot loops iterate dense COW arrays and hit
+monomorphic record shapes throughout.
+
+| metric | baseline | gate (fail if) |
+| --- | --- | --- |
+| dispatch sustained (new) | ~13M ops/s | < ~12M ops/s |
+| dispatch best-case (new) | ~63 ns/op | > ~70 ns/op |
+| trace.record (on) | ~43 ns/op | > ~55 ns/op |

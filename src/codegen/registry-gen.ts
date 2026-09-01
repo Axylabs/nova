@@ -39,11 +39,13 @@ export function emitRegistry(m: Model, fingerprint: number, ctx: EmitContext = {
 
   const userMode = ctx.schemaImport === null;
   const schemaImport = userMode ? "" : (ctx.schemaImport ?? "../schema");
-  const poolImport = userMode
-    ? (ctx.libraryImport === undefined || ctx.libraryImport === "@ignex/nova"
+  let poolImport = "../transport/byte-buffer-pool";
+  if (userMode) {
+    poolImport =
+      ctx.libraryImport === undefined || ctx.libraryImport === "@ignex/nova"
         ? "@ignex/nova/internal"
-        : ctx.libraryImport)
-    : "../transport/byte-buffer-pool";
+        : ctx.libraryImport;
+  }
 
   const lines: string[] = [];
   lines.push("// @ts-nocheck — generated file: not subject to hand-typed strictness gates");

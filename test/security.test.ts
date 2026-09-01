@@ -86,7 +86,7 @@ describe("hostile-frame robustness (untrusted decoder input)", () => {
 
   test("wrong wire version byte is rejected with null (stale/foreign frames)", () => {
     const frame = encodeEvent("quote", payloads.quote);
-    for (const v of [0, 2, 99, 255]) {
+    for (const v of [0, WIRE_VERSION + 1, 99, 255]) {
       const f = frame.slice();
       f[0] = v;
       expect(decodeFrame(f)).toBeNull();

@@ -38,7 +38,7 @@ are thin re-export shims that keep the npm entrypoints (`@ignex/nova/server`,
 `@ignex/nova/client`) and the `dist` build stable; the implementation lives in
 `src/core/`.
 
-- **Composition roots** (`src/core/server.ts`, `src/core/client.ts`) — the only
+- **Composition roots** (`src/core/server/`, `src/core/client.ts`) — the only
   places that know how the pieces fit together. `createServer(options)` builds
   the `ServerState`, wires `Bun.serve`, and returns a plain API object;
   `createClient(url, opts)` builds the client state and returns a plain API
@@ -50,7 +50,9 @@ are thin re-export shims that keep the npm entrypoints (`@ignex/nova/server`,
   the per-socket queue), `routing` (inbound dispatch), and the client's
   `client-wire` / `client-reconnect` (pure backoff math) / `client-heartbeat`.
 - **Factories** for encapsulated mutable state: `createMetrics()`, `createScratch()`
-  (reusable zero-alloc output buffer), `createStats()` (encode-path counters).
+  (reusable zero-alloc output buffer), per-event `EncodeRecord`s (encode-path
+  counters resolved eagerly at `createTransport()` — instantiation time, not
+  first-encode).
   `int64-guard` intentionally stays a module-global (cheap `off`-mode no-op) so
   threading it through the generated encoders can't cost the ~200ns hot path.
 - **Dev discipline**: `bun run lint` (oxlint with FP rules: no-var,
@@ -82,21 +84,42 @@ frames) are encoded by `generated/ts-ser.ts` — flatc's object API (`XxxT` +
 - `public/server.ts`, `public/client.ts`, `public/nats.ts` — thin re-export shims
   (npm entrypoints `@ignex/nova/server` / `client` / `nats` + the `dist` build).
   Implementation is in `src/core/` + `src/bridge/`.
-- `src/core/server.ts` — `createServer` composition root: `Bun.serve`, client
-  registry (id → socket), rooms, groups, inbound routing, control frames,
-  auth/origin/token gates, backpressure, replay history, metrics, NATS bridge
-  hook, graceful drain, `/health` + `/clients`.
+- `src/core/server/index.ts` — `createServer` composition root: `Bun.serve`,
+  client registry (id → socket), rooms, groups, inbound routing, control
+  frames, auth/origin/token gates, backpressure, replay history, metrics,
+  NATS bridge hook, graceful drain, `/health` + `/clients`. Decomposed into
+  sibling modules: `client-info.ts` (pure introspection mapper),
+  `http-routes.ts` (fetch handler), `socket-lifecycle.ts` (open/close as
+  `(state, ws)` actions), `metrics-view.ts` (pure snapshot assembly).
 - `src/core/client.ts` — `createClient` composition root: typed
   `on`/`send`/`subscribe`/`joinGroup`, reconnect with backoff, heartbeat, status
-  events, `clientId`/`groups` (from the `welcome` control frame).
-- `src/core/{state,auth,rooms,groups,replay,backpressure,outbound,routing}.ts` —
+  events, `clientId`/`groups` (from the `welcome` control frame); the rpc
+  plumbing (`client.request`) lives in `client-rpc.ts`.
+- `src/core/{state,auth,rooms,groups,replay,backpressure,outbound,routing,resume,rate-limit}.ts` —
   server action modules over the explicit `ServerState`. `groups.ts` mirrors
   `rooms.ts` (targeting sets, no replay); `state.clients` is the id→socket
-  registry, `state.groups` the group→members index.
+  registry, `state.groups` the group→members index. `rate-limit.ts` is the
+  per-connection token bucket (`options.rateLimit`, default off); `auth.ts`
+  compares literal bearer tokens in constant time and gates the HTTP admin
+  surface; topic/group joins are authorized via `authorizeTopic` /
+  `authorizeGroup`. `resume.ts` is gap-free delivery (below). `replay.ts`
+  serves per-topic snapshots (`snapshotRequest { topic, fromSeq }`) and feeds
+  the optional durable topic log; `topic-log.ts` is the pluggable durability
+  seam (`createMemoryTopicLog()` ships in-repo).
+- **Gap-free delivery** (`src/core/resume.ts`, envelope v2): with
+  `createServer({ resume })` every APP frame is stamped (in place, pre-`ws.send`)
+  with a per-connection delivery seq and recorded in a bounded per-connection
+  history ring. A client that detects a hole sends `resume { lastSeq }`; the
+  server replays from the ring with ORIGINAL seqs (in-order, duplicate-free).
+  On disconnect the ring parks in a bounded/TTL'd graveyard keyed by client id;
+  a reconnecting session adopts it via `hello { lastSeq }`. Control frames are
+  never stamped (no ordering obligations), and external copies (NATS bridge /
+  cluster envelope) are always taken BEFORE stamping mutates the scratch.
 - `src/core/{client-state,client-wire,client-reconnect,client-heartbeat}.ts` —
   client action modules over the explicit client state.
-- `src/bridge/{nats,subjects}.ts` — optional NATS bridge: `createNatsBridge`
-  (injectable `NatsTransport` for tests; eager non-blocking connect with retry),
+- `src/bridge/` — optional NATS bridge (`createNatsBridge`;
+  injectable `NatsTransport` for tests; eager non-blocking connect with retry;
+  `nats/{index,types,real-transport,inbound}.ts` + `subjects.ts`),
   subject builders (`ignex.broadcast.*` / `ignex.topic.*` / `ignex.group.*` /
   inbound `ignex.inbound.>`). Outbound frames are copied from the shared
   scratch; inbound frames are decoded via `readFrameHeader`/`decodePayload` and
@@ -105,15 +128,28 @@ frames) are encoded by `generated/ts-ser.ts` — flatc's object API (`XxxT` +
 - `src/core/metrics.ts`, `src/core/int64-guard.ts` — `createMetrics()` factory
   + the exact-int64 safety net.
 - `src/events/*` — the events layer (opt-in via `createServer({ events })`,
-  public entry `@ignex/nova/events` → `public/events.ts`): `hub.ts` composition
-  root (`server.events`, binds the module-global `emit`/`on` singleton),
-  `types.ts` (`EventClient` records with `userId` + per-connection `data`,
-  `EmitTarget` discriminated union, hub/options interfaces), `registry.ts`
-  (multi-handler dispatch with isolation), `clients.ts`/`data.ts` (client
-  store: byId + byUser index), `groups.ts` (client groups reusing the
-  transport registry + user groups), `emit.ts` (encode-once local fan-out +
-  bridge + cluster), `cluster.ts` (origin-tagged envelope, NATS/Redis/custom
-  transports, presence, shared-state indexes), `queue.ts` (bounded offload
+  public entry `@ignex/nova/events` → `public/events.ts`): `hub/` composition
+  root (`server.events`, binds the module-global `emit`/`on` singleton;
+  decomposed into `context-factory.ts` (cached handler contexts),
+  `dispatch.ts` (reliability-aware dispatch), `metrics-snapshot.ts` (pure
+  snapshot assembly), `resolve-cluster.ts` (transport resolution)),
+  `types/` (`EventClient` records with `userId` + per-connection `data`,
+  `EmitTarget` discriminated union, hub/options interfaces — one module per
+  concern behind a barrel), `registry.ts`
+  (multi-handler dispatch with isolation — copy-on-write lists,
+  allocation-free dispatch, plus a settling variant for retries), `trace.ts`
+  (the zero-GC event trace ring behind `server.getEventTrace()`),
+  `clients.ts`/`data.ts` (client store: byId + byUser index), `groups.ts`
+  (client groups reusing the transport registry + user groups), `emit.ts`
+  (encode-once; bridge + cluster copies FIRST — pristine frames — then the
+  stamped local fan-out), `cluster/` (v2 envelope codec in `envelope.ts`,
+  presence codec + table, dedupe window, shared-state keys, NATS/Redis
+  transports and memory/Redis state stores; ROUTED targeted delivery via
+  per-instance subjects; broker-redelivery dedupe window), `delivery.ts`
+  (opt-in handler retry/backoff + dead-letter sink via `events.handlers`),
+  `schedule.ts` (`hub.schedule(name, payload, target, delayMs)` + cancel),
+  `cluster-rpc.ts` (cross-instance request/response: `hub.call` /
+  `hub.onMethod` over the cluster transport), `queue.ts` (bounded offload
   workers that keep all cluster/state work off the WS hot path), `global.ts`
   (the importable `emit`/`emitToGroup`/… singleton).
 - `src/transport/{transport,scratch,stats}.ts` — object → frame encoding:
@@ -140,11 +176,11 @@ frames) are encoded by `generated/ts-ser.ts` — flatc's object API (`XxxT` +
   `publishToGroup(group, …)` (server-side targeting sets — from auth metadata,
   `joinGroup(id, group)`, or client `joinGroup` control frames).
 - **Bridge**: `createServer({ nats })` creates a `NatsBridge`. The fan-out path
-  (`fanOutAll`) encodes once and reuses that frame for WS clients AND NATS
-  (`frame.slice()` copy — the scratch is reused). Subjects are derived by
-  `src/bridge/subjects.ts`. Inbound NATS events are decoded and forwarded via
-  `fanOutAll` (no bridge call → loop prevention). All bridge counters fold into
-  `server.getMetrics()`.
+  encodes once; the NATS copy is taken BEFORE per-socket delivery-seq stamping
+  mutates the scratch header, so external consumers see pristine frames.
+  Subjects are derived by `src/bridge/subjects.ts`. Inbound NATS events are
+  decoded and forwarded via `fanOutAll` (no bridge call → loop prevention). All
+  bridge counters fold into `server.getMetrics()`.
 
 ## Why it's fast
 
@@ -167,5 +203,17 @@ frames) are encoded by `generated/ts-ser.ts` — flatc's object API (`XxxT` +
   `Type.BigInt()` fields for exact values, or enable `int64Guard`.
 - The direct fast path covers flat types + packed vectors; nested single-object
   tables fall back to JSON (observable via metrics).
-- Full gap-based replay (per-frame sequence numbers) is a future extension;
-  today the server replays bounded per-topic history on subscribe.
+- Resume history is bounded (`resume.historySize`, default 256 frames) and the
+  cross-session graveyard is TTL'd (`resume.ttlMs`, default 60s): a hole older
+  than what is retained is reported `resumed { ok: false }` — clients should
+  resubscribe topics for a fresh snapshot. Frames published while NO session
+  for a client id exists are not buffered per-client (that's an offline-inbox
+  feature, not resume).
+- The durable topic log seam ships with a process-local implementation
+  (`createMemoryTopicLog`); production adapters (NATS JetStream / Redis
+  Streams / filesystem) implement the same three-method interface.
+- Cluster envelope v2 is not understood by v1 peers (rolling upgrades count
+  decode errors on the old instances until they are replaced).
+- Cross-instance rpc `.any` calls are delivered to every instance; the first
+  response wins and later responders still execute their handlers (keep
+  `.any` methods idempotent, or address a specific instance).

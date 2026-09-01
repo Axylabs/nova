@@ -28,7 +28,8 @@ const REQUIRED = [
   "public/internal.ts",
   "docs/events.md",
   "src/schema/index.ts",
-  "src/core/server.ts",
+  // composition roots live in folders (index.ts = the root module)
+  "src/core/server/index.ts",
   "src/core/client.ts",
   "src/native/loader.ts",
   // codegen (consumed at runtime by `ignex-nova/generate`)

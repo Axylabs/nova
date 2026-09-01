@@ -52,6 +52,16 @@ Rules (same as the built-in registry):
 - The transport control events (hello / welcome / subscribe / unsubscribe /
   joinGroup / leaveGroup / snapshotRequest / ping / pong) are ALWAYS included —
   you can add your own but cannot override the standard ones.
+- **Unsupported field types fail loudly at generate time.** `Type.Any()`,
+  `Type.Unknown()`, `Type.Date()`, `Type.Null()`, `Type.Record(...)`, and mixed
+  unions (e.g. `number | string`) have no FlatBuffers representation and are
+  rejected with a clear error — they used to be *silently coerced to `string`
+  fields*, which forced `JSON.stringify(...)` at the call site and put raw JSON
+  text inside the (still-binary) frame. If you genuinely need an opaque JSON
+  payload, model it explicitly as `Type.String()` and pass the JSON string —
+  the frame stays valid, but the JSON bytes appear verbatim in it. Prefer typed
+  fields (nested tables, vectors, scalars) so the wire carries structure
+  instead of JSON text.
 
 ## 2. Generate bindings
 

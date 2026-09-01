@@ -292,9 +292,12 @@ createServer({
   replay: { historySize: 64 },      // per-topic last-value replay on subscribe
   authenticate: async (req) => checkToken(req.headers.get("authorization")),
   allowedOrigins: ["http://localhost:3000"],
-  token: "shared-secret",           // or (tok) => boolean
+  token: "shared-secret",           // or (tok) => boolean — constant-time compared
   maxConnections: 10_000,
   maxMessageSize: 64 * 1024,
+  rateLimit: { messagesPerSecond: 100, burst: 200, policy: "drop" }, // per-conn inbound bucket ("close" → 1008)
+  authorizeTopic: (topic, ws) => topic !== "admin",   // gate room joins (all paths)
+  authorizeGroup: (group, ws) => ws.data.userId != null, // gate group joins
   int64Guard: "warn",               // "off" | "throw" | "warn"
   nats: { servers: ["nats://localhost:4222"], inbound: true }, // optional NATS bridge
   tls: { keyFile, certFile },       // enables wss://

@@ -67,6 +67,11 @@ export interface ClientStore {
   get(id: string): EventClient | undefined;
   all(): EventClient[];
   byUser(userId: string): EventClient[];
+  /**
+   * Invoke `each` for every live socket of `userId`; returns the count.
+   * Allocation-free variant of {@link byUser} for emit hot paths.
+   */
+  forEachByUser(userId: string, each: (client: EventClient) => void): number;
   setUserId(clientId: string, userId: string): boolean;
   onAttach(cb: (client: EventClient) => void): void;
   onDetach(cb: (client: EventClient) => void): void;
@@ -135,6 +140,19 @@ export function createClientStore(): ClientStore {
         if (c) out.push(c);
       }
       return out;
+    },
+    forEachByUser(userId, each) {
+      const ids = byUser.get(userId);
+      if (ids === undefined || ids.size === 0) return 0;
+      let n = 0;
+      for (const id of ids) {
+        const c = byId.get(id);
+        if (c !== undefined) {
+          each(c);
+          n++;
+        }
+      }
+      return n;
     },
     setUserId(clientId, userId) {
       const client = byId.get(clientId);

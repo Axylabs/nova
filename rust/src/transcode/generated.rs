@@ -9,9 +9,9 @@ use std::os::raw::c_char;
 use serde::Deserialize;
 use crate::generated::backend;
 
-pub const WIRE_VERSION: u8 = 1;
-pub const WIRE_HEADER_LEN: usize = 5; // [version:1][event_id:u32 LE]
-pub const SCHEMA_FINGERPRINT: u64 = 1656642724; // fnv1a32(canonical model)
+pub const WIRE_VERSION: u8 = 2;
+pub const WIRE_HEADER_LEN: usize = 14; // [version:1][event_id:u32 LE][flags:1][seq:u64 LE]
+pub const SCHEMA_FINGERPRINT: u64 = 3647747841; // fnv1a32(canonical model)
 
 thread_local! {
     static FBB: RefCell<flatbuffers::FlatBufferBuilder<'static>> =
@@ -473,12 +473,15 @@ pub fn build_leave_group<'a>(fbb: &mut flatbuffers::FlatBufferBuilder<'a>, j: &L
 pub struct SnapshotRequestJson {
     #[serde(default)]
     pub topic: String,
+    #[serde(default, deserialize_with = "de_i64")]
+    pub from_seq: i64,
 }
 
 pub fn build_snapshot_request<'a>(fbb: &mut flatbuffers::FlatBufferBuilder<'a>, j: &SnapshotRequestJson) -> flatbuffers::WIPOffset<backend::SnapshotRequest<'a>> {
     let topic = fbb.create_string(&j.topic);
     backend::SnapshotRequest::create(fbb, &backend::SnapshotRequestArgs {
         topic: Some(topic),
+        from_seq: j.from_seq,
         ..Default::default()
     })
 }
@@ -509,6 +512,88 @@ pub fn build_pong<'a>(fbb: &mut flatbuffers::FlatBufferBuilder<'a>, j: &PongJson
     
     backend::Pong::create(fbb, &backend::PongArgs {
         ts: j.ts,
+        ..Default::default()
+    })
+}
+
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ResumeJson {
+    #[serde(default, deserialize_with = "de_i64")]
+    pub last_seq: i64,
+}
+
+pub fn build_resume<'a>(fbb: &mut flatbuffers::FlatBufferBuilder<'a>, j: &ResumeJson) -> flatbuffers::WIPOffset<backend::Resume<'a>> {
+    
+    backend::Resume::create(fbb, &backend::ResumeArgs {
+        last_seq: j.last_seq,
+        ..Default::default()
+    })
+}
+
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ResumedJson {
+    #[serde(default)]
+    pub ok: bool,
+    #[serde(default, deserialize_with = "de_i64")]
+    pub from: i64,
+}
+
+pub fn build_resumed<'a>(fbb: &mut flatbuffers::FlatBufferBuilder<'a>, j: &ResumedJson) -> flatbuffers::WIPOffset<backend::Resumed<'a>> {
+    
+    backend::Resumed::create(fbb, &backend::ResumedArgs {
+        ok: j.ok,
+        from: j.from,
+        ..Default::default()
+    })
+}
+
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcCallJson {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub payload_b64: String,
+}
+
+pub fn build_rpc_call<'a>(fbb: &mut flatbuffers::FlatBufferBuilder<'a>, j: &RpcCallJson) -> flatbuffers::WIPOffset<backend::RpcCall<'a>> {
+    let id = fbb.create_string(&j.id);
+    let name = fbb.create_string(&j.name);
+    let payload_b64 = fbb.create_string(&j.payload_b64);
+    backend::RpcCall::create(fbb, &backend::RpcCallArgs {
+        id: Some(id),
+        name: Some(name),
+        payload_b64: Some(payload_b64),
+        ..Default::default()
+    })
+}
+
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcResultJson {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub ok: bool,
+    #[serde(default)]
+    pub err: String,
+    #[serde(default)]
+    pub payload_b64: String,
+}
+
+pub fn build_rpc_result<'a>(fbb: &mut flatbuffers::FlatBufferBuilder<'a>, j: &RpcResultJson) -> flatbuffers::WIPOffset<backend::RpcResult<'a>> {
+    let id = fbb.create_string(&j.id);
+    let err = fbb.create_string(&j.err);
+    let payload_b64 = fbb.create_string(&j.payload_b64);
+    backend::RpcResult::create(fbb, &backend::RpcResultArgs {
+        id: Some(id),
+        ok: j.ok,
+        err: Some(err),
+        payload_b64: Some(payload_b64),
         ..Default::default()
     })
 }
@@ -586,6 +671,26 @@ pub fn serialize_ping(json: &[u8], out: &mut [u8]) -> Result<usize, TranscodeErr
 pub fn serialize_pong(json: &[u8], out: &mut [u8]) -> Result<usize, TranscodeError> {
     let j: PongJson = serde_json::from_slice(json).map_err(|_| TranscodeError::Parse)?;
     copy_finished(out, |fbb| build_pong(fbb, &j))
+}
+
+pub fn serialize_resume(json: &[u8], out: &mut [u8]) -> Result<usize, TranscodeError> {
+    let j: ResumeJson = serde_json::from_slice(json).map_err(|_| TranscodeError::Parse)?;
+    copy_finished(out, |fbb| build_resume(fbb, &j))
+}
+
+pub fn serialize_resumed(json: &[u8], out: &mut [u8]) -> Result<usize, TranscodeError> {
+    let j: ResumedJson = serde_json::from_slice(json).map_err(|_| TranscodeError::Parse)?;
+    copy_finished(out, |fbb| build_resumed(fbb, &j))
+}
+
+pub fn serialize_rpc_call(json: &[u8], out: &mut [u8]) -> Result<usize, TranscodeError> {
+    let j: RpcCallJson = serde_json::from_slice(json).map_err(|_| TranscodeError::Parse)?;
+    copy_finished(out, |fbb| build_rpc_call(fbb, &j))
+}
+
+pub fn serialize_rpc_result(json: &[u8], out: &mut [u8]) -> Result<usize, TranscodeError> {
+    let j: RpcResultJson = serde_json::from_slice(json).map_err(|_| TranscodeError::Parse)?;
+    copy_finished(out, |fbb| build_rpc_result(fbb, &j))
 }
 
 fn read_u32(b: &[u8], off: &mut usize) -> u32 {
@@ -713,7 +818,7 @@ fn read_packed_welcome_groups<'a>(fbb: &mut flatbuffers::FlatBufferBuilder<'a>, 
 }
 
 
-#[no_mangle]
+#[export_name = "fb_quote_serialize"]
 pub unsafe extern "C" fn fb_quote_serialize(
     symbol: *const c_char,
     bid: f64,
@@ -753,6 +858,10 @@ pub unsafe extern "C" fn fb_quote_serialize(
                     *out.add(0) = WIRE_VERSION;
                     let id_bytes = 2995289047u32.to_le_bytes();
                     std::ptr::copy_nonoverlapping(id_bytes.as_ptr(), out.add(1), 4);
+                    // [flags:1][seq:u64 LE] — pristine (flags=0, seq=0); the
+                    // server stamps per-destination delivery seqs on send.
+                    *out.add(5) = 0;
+                    std::ptr::write_bytes(out.add(6), 0, 8);
                 }
                 needed
             }
@@ -762,7 +871,7 @@ pub unsafe extern "C" fn fb_quote_serialize(
     .unwrap_or(0)
 }
 
-#[no_mangle]
+#[export_name = "fb_trade_serialize"]
 pub unsafe extern "C" fn fb_trade_serialize(
     symbol: *const c_char,
     price: f64,
@@ -801,6 +910,10 @@ pub unsafe extern "C" fn fb_trade_serialize(
                     *out.add(0) = WIRE_VERSION;
                     let id_bytes = 1362521689u32.to_le_bytes();
                     std::ptr::copy_nonoverlapping(id_bytes.as_ptr(), out.add(1), 4);
+                    // [flags:1][seq:u64 LE] — pristine (flags=0, seq=0); the
+                    // server stamps per-destination delivery seqs on send.
+                    *out.add(5) = 0;
+                    std::ptr::write_bytes(out.add(6), 0, 8);
                 }
                 needed
             }
@@ -810,7 +923,7 @@ pub unsafe extern "C" fn fb_trade_serialize(
     .unwrap_or(0)
 }
 
-#[no_mangle]
+#[export_name = "fb_portfolio_serialize"]
 pub unsafe extern "C" fn fb_portfolio_serialize(
     account_id: *const c_char,
     positions_ptr: *const u8,
@@ -854,6 +967,10 @@ pub unsafe extern "C" fn fb_portfolio_serialize(
                     *out.add(0) = WIRE_VERSION;
                     let id_bytes = 464274147u32.to_le_bytes();
                     std::ptr::copy_nonoverlapping(id_bytes.as_ptr(), out.add(1), 4);
+                    // [flags:1][seq:u64 LE] — pristine (flags=0, seq=0); the
+                    // server stamps per-destination delivery seqs on send.
+                    *out.add(5) = 0;
+                    std::ptr::write_bytes(out.add(6), 0, 8);
                 }
                 needed
             }
@@ -863,7 +980,7 @@ pub unsafe extern "C" fn fb_portfolio_serialize(
     .unwrap_or(0)
 }
 
-#[no_mangle]
+#[export_name = "fb_complex_serialize"]
 pub unsafe extern "C" fn fb_complex_serialize(
     id: *const c_char,
     names_ptr: *const u8,
@@ -919,6 +1036,10 @@ pub unsafe extern "C" fn fb_complex_serialize(
                     *out.add(0) = WIRE_VERSION;
                     let id_bytes = 2318166199u32.to_le_bytes();
                     std::ptr::copy_nonoverlapping(id_bytes.as_ptr(), out.add(1), 4);
+                    // [flags:1][seq:u64 LE] — pristine (flags=0, seq=0); the
+                    // server stamps per-destination delivery seqs on send.
+                    *out.add(5) = 0;
+                    std::ptr::write_bytes(out.add(6), 0, 8);
                 }
                 needed
             }
@@ -928,7 +1049,7 @@ pub unsafe extern "C" fn fb_complex_serialize(
     .unwrap_or(0)
 }
 
-#[no_mangle]
+#[export_name = "fb_big_val_serialize"]
 pub unsafe extern "C" fn fb_big_val_serialize(
     id: *const c_char,
     seq: i64,
@@ -962,6 +1083,10 @@ pub unsafe extern "C" fn fb_big_val_serialize(
                     *out.add(0) = WIRE_VERSION;
                     let id_bytes = 3211729064u32.to_le_bytes();
                     std::ptr::copy_nonoverlapping(id_bytes.as_ptr(), out.add(1), 4);
+                    // [flags:1][seq:u64 LE] — pristine (flags=0, seq=0); the
+                    // server stamps per-destination delivery seqs on send.
+                    *out.add(5) = 0;
+                    std::ptr::write_bytes(out.add(6), 0, 8);
                 }
                 needed
             }
@@ -971,7 +1096,7 @@ pub unsafe extern "C" fn fb_big_val_serialize(
     .unwrap_or(0)
 }
 
-#[no_mangle]
+#[export_name = "fb_hello_serialize"]
 pub unsafe extern "C" fn fb_hello_serialize(
     version: i64,
     caps_ptr: *const u8,
@@ -1006,6 +1131,10 @@ pub unsafe extern "C" fn fb_hello_serialize(
                     *out.add(0) = WIRE_VERSION;
                     let id_bytes = 1335831723u32.to_le_bytes();
                     std::ptr::copy_nonoverlapping(id_bytes.as_ptr(), out.add(1), 4);
+                    // [flags:1][seq:u64 LE] — pristine (flags=0, seq=0); the
+                    // server stamps per-destination delivery seqs on send.
+                    *out.add(5) = 0;
+                    std::ptr::write_bytes(out.add(6), 0, 8);
                 }
                 needed
             }
@@ -1015,7 +1144,7 @@ pub unsafe extern "C" fn fb_hello_serialize(
     .unwrap_or(0)
 }
 
-#[no_mangle]
+#[export_name = "fb_welcome_serialize"]
 pub unsafe extern "C" fn fb_welcome_serialize(
     client_id: *const c_char,
     groups_ptr: *const u8,
@@ -1049,6 +1178,10 @@ pub unsafe extern "C" fn fb_welcome_serialize(
                     *out.add(0) = WIRE_VERSION;
                     let id_bytes = 669089267u32.to_le_bytes();
                     std::ptr::copy_nonoverlapping(id_bytes.as_ptr(), out.add(1), 4);
+                    // [flags:1][seq:u64 LE] — pristine (flags=0, seq=0); the
+                    // server stamps per-destination delivery seqs on send.
+                    *out.add(5) = 0;
+                    std::ptr::write_bytes(out.add(6), 0, 8);
                 }
                 needed
             }
@@ -1058,7 +1191,7 @@ pub unsafe extern "C" fn fb_welcome_serialize(
     .unwrap_or(0)
 }
 
-#[no_mangle]
+#[export_name = "fb_subscribe_serialize"]
 pub unsafe extern "C" fn fb_subscribe_serialize(
     topic: *const c_char,
     out: *mut u8,
@@ -1088,6 +1221,10 @@ pub unsafe extern "C" fn fb_subscribe_serialize(
                     *out.add(0) = WIRE_VERSION;
                     let id_bytes = 2946386435u32.to_le_bytes();
                     std::ptr::copy_nonoverlapping(id_bytes.as_ptr(), out.add(1), 4);
+                    // [flags:1][seq:u64 LE] — pristine (flags=0, seq=0); the
+                    // server stamps per-destination delivery seqs on send.
+                    *out.add(5) = 0;
+                    std::ptr::write_bytes(out.add(6), 0, 8);
                 }
                 needed
             }
@@ -1097,7 +1234,7 @@ pub unsafe extern "C" fn fb_subscribe_serialize(
     .unwrap_or(0)
 }
 
-#[no_mangle]
+#[export_name = "fb_unsubscribe_serialize"]
 pub unsafe extern "C" fn fb_unsubscribe_serialize(
     topic: *const c_char,
     out: *mut u8,
@@ -1127,6 +1264,10 @@ pub unsafe extern "C" fn fb_unsubscribe_serialize(
                     *out.add(0) = WIRE_VERSION;
                     let id_bytes = 4190043798u32.to_le_bytes();
                     std::ptr::copy_nonoverlapping(id_bytes.as_ptr(), out.add(1), 4);
+                    // [flags:1][seq:u64 LE] — pristine (flags=0, seq=0); the
+                    // server stamps per-destination delivery seqs on send.
+                    *out.add(5) = 0;
+                    std::ptr::write_bytes(out.add(6), 0, 8);
                 }
                 needed
             }
@@ -1136,7 +1277,7 @@ pub unsafe extern "C" fn fb_unsubscribe_serialize(
     .unwrap_or(0)
 }
 
-#[no_mangle]
+#[export_name = "fb_join_group_serialize"]
 pub unsafe extern "C" fn fb_join_group_serialize(
     group: *const c_char,
     out: *mut u8,
@@ -1166,6 +1307,10 @@ pub unsafe extern "C" fn fb_join_group_serialize(
                     *out.add(0) = WIRE_VERSION;
                     let id_bytes = 3026600144u32.to_le_bytes();
                     std::ptr::copy_nonoverlapping(id_bytes.as_ptr(), out.add(1), 4);
+                    // [flags:1][seq:u64 LE] — pristine (flags=0, seq=0); the
+                    // server stamps per-destination delivery seqs on send.
+                    *out.add(5) = 0;
+                    std::ptr::write_bytes(out.add(6), 0, 8);
                 }
                 needed
             }
@@ -1175,7 +1320,7 @@ pub unsafe extern "C" fn fb_join_group_serialize(
     .unwrap_or(0)
 }
 
-#[no_mangle]
+#[export_name = "fb_leave_group_serialize"]
 pub unsafe extern "C" fn fb_leave_group_serialize(
     group: *const c_char,
     out: *mut u8,
@@ -1205,6 +1350,10 @@ pub unsafe extern "C" fn fb_leave_group_serialize(
                     *out.add(0) = WIRE_VERSION;
                     let id_bytes = 3755061443u32.to_le_bytes();
                     std::ptr::copy_nonoverlapping(id_bytes.as_ptr(), out.add(1), 4);
+                    // [flags:1][seq:u64 LE] — pristine (flags=0, seq=0); the
+                    // server stamps per-destination delivery seqs on send.
+                    *out.add(5) = 0;
+                    std::ptr::write_bytes(out.add(6), 0, 8);
                 }
                 needed
             }
@@ -1214,9 +1363,10 @@ pub unsafe extern "C" fn fb_leave_group_serialize(
     .unwrap_or(0)
 }
 
-#[no_mangle]
+#[export_name = "fb_snapshot_request_serialize"]
 pub unsafe extern "C" fn fb_snapshot_request_serialize(
     topic: *const c_char,
+    from_seq: i64,
     out: *mut u8,
     out_cap: usize,
 ) -> usize {
@@ -1235,6 +1385,7 @@ pub unsafe extern "C" fn fb_snapshot_request_serialize(
             let topic = fbb.create_string(topic);
             backend::SnapshotRequest::create(fbb, &backend::SnapshotRequestArgs {
                 topic: Some(topic),
+                from_seq: from_seq,
                 ..Default::default()
             })
         }) {
@@ -1244,6 +1395,10 @@ pub unsafe extern "C" fn fb_snapshot_request_serialize(
                     *out.add(0) = WIRE_VERSION;
                     let id_bytes = 1249175018u32.to_le_bytes();
                     std::ptr::copy_nonoverlapping(id_bytes.as_ptr(), out.add(1), 4);
+                    // [flags:1][seq:u64 LE] — pristine (flags=0, seq=0); the
+                    // server stamps per-destination delivery seqs on send.
+                    *out.add(5) = 0;
+                    std::ptr::write_bytes(out.add(6), 0, 8);
                 }
                 needed
             }
@@ -1253,7 +1408,7 @@ pub unsafe extern "C" fn fb_snapshot_request_serialize(
     .unwrap_or(0)
 }
 
-#[no_mangle]
+#[export_name = "fb_ping_serialize"]
 pub unsafe extern "C" fn fb_ping_serialize(
     ts: i64,
     out: *mut u8,
@@ -1283,6 +1438,10 @@ pub unsafe extern "C" fn fb_ping_serialize(
                     *out.add(0) = WIRE_VERSION;
                     let id_bytes = 375255177u32.to_le_bytes();
                     std::ptr::copy_nonoverlapping(id_bytes.as_ptr(), out.add(1), 4);
+                    // [flags:1][seq:u64 LE] — pristine (flags=0, seq=0); the
+                    // server stamps per-destination delivery seqs on send.
+                    *out.add(5) = 0;
+                    std::ptr::write_bytes(out.add(6), 0, 8);
                 }
                 needed
             }
@@ -1292,7 +1451,7 @@ pub unsafe extern "C" fn fb_ping_serialize(
     .unwrap_or(0)
 }
 
-#[no_mangle]
+#[export_name = "fb_pong_serialize"]
 pub unsafe extern "C" fn fb_pong_serialize(
     ts: i64,
     out: *mut u8,
@@ -1322,6 +1481,202 @@ pub unsafe extern "C" fn fb_pong_serialize(
                     *out.add(0) = WIRE_VERSION;
                     let id_bytes = 2061178551u32.to_le_bytes();
                     std::ptr::copy_nonoverlapping(id_bytes.as_ptr(), out.add(1), 4);
+                    // [flags:1][seq:u64 LE] — pristine (flags=0, seq=0); the
+                    // server stamps per-destination delivery seqs on send.
+                    *out.add(5) = 0;
+                    std::ptr::write_bytes(out.add(6), 0, 8);
+                }
+                needed
+            }
+            Err(_) => 0,
+        }
+    }))
+    .unwrap_or(0)
+}
+
+#[export_name = "fb_resume_serialize"]
+pub unsafe extern "C" fn fb_resume_serialize(
+    last_seq: i64,
+    out: *mut u8,
+    out_cap: usize,
+) -> usize {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if out.is_null() && out_cap != 0 {
+            return 0;
+        }
+        
+        // envelope = [WIRE_VERSION:1][event_id:u32 LE]; flatbuffer payload follows
+        let payload: &mut [u8] = if out_cap < WIRE_HEADER_LEN {
+            &mut []
+        } else {
+            std::slice::from_raw_parts_mut(out.add(WIRE_HEADER_LEN), out_cap - WIRE_HEADER_LEN)
+        };
+        match copy_finished(payload, |fbb| {
+            
+            backend::Resume::create(fbb, &backend::ResumeArgs {
+                last_seq: last_seq,
+                ..Default::default()
+            })
+        }) {
+            Ok(written) => {
+                let needed = written + WIRE_HEADER_LEN;
+                if needed <= out_cap {
+                    *out.add(0) = WIRE_VERSION;
+                    let id_bytes = 4281967466u32.to_le_bytes();
+                    std::ptr::copy_nonoverlapping(id_bytes.as_ptr(), out.add(1), 4);
+                    // [flags:1][seq:u64 LE] — pristine (flags=0, seq=0); the
+                    // server stamps per-destination delivery seqs on send.
+                    *out.add(5) = 0;
+                    std::ptr::write_bytes(out.add(6), 0, 8);
+                }
+                needed
+            }
+            Err(_) => 0,
+        }
+    }))
+    .unwrap_or(0)
+}
+
+#[export_name = "fb_resumed_serialize"]
+pub unsafe extern "C" fn fb_resumed_serialize(
+    ok: u8,
+    from: i64,
+    out: *mut u8,
+    out_cap: usize,
+) -> usize {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if out.is_null() && out_cap != 0 {
+            return 0;
+        }
+        
+        // envelope = [WIRE_VERSION:1][event_id:u32 LE]; flatbuffer payload follows
+        let payload: &mut [u8] = if out_cap < WIRE_HEADER_LEN {
+            &mut []
+        } else {
+            std::slice::from_raw_parts_mut(out.add(WIRE_HEADER_LEN), out_cap - WIRE_HEADER_LEN)
+        };
+        match copy_finished(payload, |fbb| {
+            
+            backend::Resumed::create(fbb, &backend::ResumedArgs {
+                ok: ok != 0,
+                from: from,
+                ..Default::default()
+            })
+        }) {
+            Ok(written) => {
+                let needed = written + WIRE_HEADER_LEN;
+                if needed <= out_cap {
+                    *out.add(0) = WIRE_VERSION;
+                    let id_bytes = 3585847050u32.to_le_bytes();
+                    std::ptr::copy_nonoverlapping(id_bytes.as_ptr(), out.add(1), 4);
+                    // [flags:1][seq:u64 LE] — pristine (flags=0, seq=0); the
+                    // server stamps per-destination delivery seqs on send.
+                    *out.add(5) = 0;
+                    std::ptr::write_bytes(out.add(6), 0, 8);
+                }
+                needed
+            }
+            Err(_) => 0,
+        }
+    }))
+    .unwrap_or(0)
+}
+
+#[export_name = "fb_rpc_call_serialize"]
+pub unsafe extern "C" fn fb_rpc_call_serialize(
+    id: *const c_char,
+    name: *const c_char,
+    payload_b64: *const c_char,
+    out: *mut u8,
+    out_cap: usize,
+) -> usize {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if out.is_null() && out_cap != 0 {
+            return 0;
+        }
+        let id = if id.is_null() { "" } else { std::str::from_utf8_unchecked(CStr::from_ptr(id).to_bytes()) };
+        let name = if name.is_null() { "" } else { std::str::from_utf8_unchecked(CStr::from_ptr(name).to_bytes()) };
+        let payload_b64 = if payload_b64.is_null() { "" } else { std::str::from_utf8_unchecked(CStr::from_ptr(payload_b64).to_bytes()) };
+        // envelope = [WIRE_VERSION:1][event_id:u32 LE]; flatbuffer payload follows
+        let payload: &mut [u8] = if out_cap < WIRE_HEADER_LEN {
+            &mut []
+        } else {
+            std::slice::from_raw_parts_mut(out.add(WIRE_HEADER_LEN), out_cap - WIRE_HEADER_LEN)
+        };
+        match copy_finished(payload, |fbb| {
+            let id = fbb.create_string(id);
+            let name = fbb.create_string(name);
+            let payload_b64 = fbb.create_string(payload_b64);
+            backend::RpcCall::create(fbb, &backend::RpcCallArgs {
+                id: Some(id),
+                name: Some(name),
+                payload_b64: Some(payload_b64),
+                ..Default::default()
+            })
+        }) {
+            Ok(written) => {
+                let needed = written + WIRE_HEADER_LEN;
+                if needed <= out_cap {
+                    *out.add(0) = WIRE_VERSION;
+                    let id_bytes = 986404564u32.to_le_bytes();
+                    std::ptr::copy_nonoverlapping(id_bytes.as_ptr(), out.add(1), 4);
+                    // [flags:1][seq:u64 LE] — pristine (flags=0, seq=0); the
+                    // server stamps per-destination delivery seqs on send.
+                    *out.add(5) = 0;
+                    std::ptr::write_bytes(out.add(6), 0, 8);
+                }
+                needed
+            }
+            Err(_) => 0,
+        }
+    }))
+    .unwrap_or(0)
+}
+
+#[export_name = "fb_rpc_result_serialize"]
+pub unsafe extern "C" fn fb_rpc_result_serialize(
+    id: *const c_char,
+    ok: u8,
+    err: *const c_char,
+    payload_b64: *const c_char,
+    out: *mut u8,
+    out_cap: usize,
+) -> usize {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if out.is_null() && out_cap != 0 {
+            return 0;
+        }
+        let id = if id.is_null() { "" } else { std::str::from_utf8_unchecked(CStr::from_ptr(id).to_bytes()) };
+        let err = if err.is_null() { "" } else { std::str::from_utf8_unchecked(CStr::from_ptr(err).to_bytes()) };
+        let payload_b64 = if payload_b64.is_null() { "" } else { std::str::from_utf8_unchecked(CStr::from_ptr(payload_b64).to_bytes()) };
+        // envelope = [WIRE_VERSION:1][event_id:u32 LE]; flatbuffer payload follows
+        let payload: &mut [u8] = if out_cap < WIRE_HEADER_LEN {
+            &mut []
+        } else {
+            std::slice::from_raw_parts_mut(out.add(WIRE_HEADER_LEN), out_cap - WIRE_HEADER_LEN)
+        };
+        match copy_finished(payload, |fbb| {
+            let id = fbb.create_string(id);
+            let err = fbb.create_string(err);
+            let payload_b64 = fbb.create_string(payload_b64);
+            backend::RpcResult::create(fbb, &backend::RpcResultArgs {
+                id: Some(id),
+                ok: ok != 0,
+                err: Some(err),
+                payload_b64: Some(payload_b64),
+                ..Default::default()
+            })
+        }) {
+            Ok(written) => {
+                let needed = written + WIRE_HEADER_LEN;
+                if needed <= out_cap {
+                    *out.add(0) = WIRE_VERSION;
+                    let id_bytes = 648609069u32.to_le_bytes();
+                    std::ptr::copy_nonoverlapping(id_bytes.as_ptr(), out.add(1), 4);
+                    // [flags:1][seq:u64 LE] — pristine (flags=0, seq=0); the
+                    // server stamps per-destination delivery seqs on send.
+                    *out.add(5) = 0;
+                    std::ptr::write_bytes(out.add(6), 0, 8);
                 }
                 needed
             }
@@ -1348,6 +1703,10 @@ pub fn serialize_event(event_id: u32, json: &[u8], out: &mut [u8]) -> Result<usi
         1249175018 => serialize_snapshot_request(json, out),
         375255177 => serialize_ping(json, out),
         2061178551 => serialize_pong(json, out),
+        4281967466 => serialize_resume(json, out),
+        3585847050 => serialize_resumed(json, out),
+        986404564 => serialize_rpc_call(json, out),
+        648609069 => serialize_rpc_result(json, out),
         _ => Err(TranscodeError::UnknownEvent),
     }
 }

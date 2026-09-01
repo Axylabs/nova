@@ -142,14 +142,96 @@ deferred to a bounded offload queue (`events.queue`, drop-newest on overflow).
 - Self-delivery dedupe: frames carry the origin `instanceId`
   (`cluster.instanceId`, random by default); an instance drops its own frames,
   so a broadcast is delivered exactly once per socket.
+- **Broker-redelivery dedupe**: every message carries a unique id; a durable
+  broker that redelivers after reconnect gets its duplicates dropped inside the
+  receiver's window (`metrics.events.clusterDroppedDupe`).
+- **Routed targeted delivery**: `emitToClient` / `emitToUser` consult cluster
+  presence and are published ONLY to the per-instance subject of the instance(s)
+  that hold the destination socket(s) — not to the whole mesh. Unknown targets
+  fall back to the full-mesh wildcard (visible in
+  `metrics.events.clusterRouted` vs `clusterPublished`).
 - **Presence with no shared state**: join/leave + periodic heartbeat messages
-  — `hub.clusterClients()` lists connections on other instances.
+  — `hub.clusterClients()` lists connections on other instances;
+  `hub.clusterInstances()` lists the other instances themselves.
 - **Shared state store** (`cluster.state`, default per-instance memory;
   production: `createRedisStateStore(...)`): user→clients index
   (`clusterUserClients`), cluster group membership, cluster-wide client data.
+- **Cross-instance rpc** (`hub.call` / `hub.onMethod`): request/response
+  between instances over the same transport — targeted
+  (`call(method, args, { instanceId })`) or any-instance
+  (`call(method)` — first response wins; keep `.any` handlers idempotent).
+  Timeouts bound every call; counters fold into `metrics.events.rpcSent` /
+  `rpcReceived`.
+- **Trace propagation**: emits carry a unique trace id through the cluster
+  envelope; remote `onServerEvent` contexts expose it as `ctx.traceId` for
+  end-to-end correlation.
 - **Server-side events**: other instances' events reach `onServerEvent`
   handlers with `ctx.source === "remote"` (delivered to clients AND handlers);
   NATS-inbound events reach them with `source === "bridge"`.
+
+## Handler reliability — retries + dead letters
+
+Opt in via `createServer({ events: { handlers: {...} } })`; without it,
+dispatch is fire-and-forget with per-handler error isolation only.
+
+```ts
+createServer({
+  port: 3000,
+  events: {
+    handlers: {
+      retries: 2,          // extra attempts after the first try
+      backoffMs: 100,      // doubling: 100ms, 200ms, …
+      dlq(info) { /* { name, payload, err, attempts } */ },
+    },
+  },
+});
+```
+
+A handler that keeps failing is retried on the same event, then handed to
+`dlq`. Counters live in `server.getMetrics().events.handlerRetries` /
+`.dlqCount`.
+
+## Scheduled emits (time-based events)
+
+```ts
+const id = hub.schedule("reminder.push", payload, { type: "user", userId }, delayMs);
+hub.cancelScheduled(id);   // true if it had not fired yet
+hub.scheduledCount;        // pending count
+```
+
+Scheduled emits run through the normal emit path at fire time — identical
+targeting, bridging and cluster routing semantics. Timers are cleared on
+`hub.close()`.
+
+## Request/response
+
+Two complementary layers:
+
+- **Client ⇄ this server**: `client.request(name, payload)` sends an `rpcCall`
+  control frame (correlation id + timeout) and awaits the responder registered
+  via `server.handle(name, fn)` or `hub.onRequest(name, fn)`. The response
+  reuses the SAME event schema both directions.
+- **Instance ⇄ instance**: `hub.call` / `hub.onMethod` (above).
+
+## Event trace (what fired — debugger visibility)
+
+Every server owns an **event trace ring** (`src/events/trace.ts`) that records
+each fired event — emitted (`out.emit`), published through the server API
+(`out.publish`), received from a client (`in.client`), from another instance
+(`in.remote`), or from the NATS bridge (`in.bridge`) — with its wire name,
+target kind + key (topic/group/userId/clientId), frame size and timestamp.
+
+- **Zero-GC by construction**: scalars live in pre-allocated TypedArrays,
+  strings are held by reference in reused slots; row objects materialize only
+  when the ring is read. Recording is a handful of typed-array stores (~ns).
+- Read it with `server.getEventTrace({ limit, direction, name })` →
+  `{ enabled, capacity, stats, recent }` (newest first) and reset it with
+  `server.clearEventTrace()`. `stats.byName` / `stats.last` power at-a-glance
+  panels (the ignex debugbar's Nova panel and MCP tool use exactly this).
+- Configure with `createServer({ trace: { capacity, enabled, capturePayloadChars } })`.
+  Default: on, capacity 1024, no payload capture. `IGNEX_NOVA_TRACE=0`
+  disables recording globally; set `capturePayloadChars` (e.g. 512) to store
+  truncated JSON previews of each payload (opt-in — costs a stringify/event).
 
 ## Metrics & shutdown
 
