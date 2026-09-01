@@ -1,6 +1,6 @@
 {
   "name": "@ignex/nova",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "type": "module",
   "description": "TypeBox-driven FlatBuffer transport: Rust FFI serializer + Bun WebSocket + typed pub/sub API for server and FE.",
   "license": "MIT",

@@ -98,11 +98,14 @@ function orderedDeliver(state: ClientState, bytes: Uint8Array, seq: number): boo
     return true;
   }
   if (seq <= state.rxSeq) {
-    // replayed hole-fill or duplicate: hole-fills are NEW payloads (the live
-    // copy was lost), duplicates are rare broker artifacts — deliver both is
-    // unsafe, so dedupe by seq against frames already dispatched past a hole:
-    // we track nothing extra because replays only cover UNDELIVERED ranges.
-    dispatchAppFrame(state, bytes);
+    // Duplicate of an already-dispatched frame. Every seq ≤ rxSeq has been
+    // delivered (contiguously or via the pending drain), so a late replay of
+    // it must NOT be dispatched again. This happens when a `resume`/`hello`
+    // replay range overlaps frames the client already received live — e.g.
+    // the server processed our `hello { lastSeq }` AFTER the frames were sent
+    // (reconnect race), or a gap-fill replay re-sends frames that were already
+    // drained out of `pending`. Redelivering here would break the duplicate-
+    // free contract, so we consume and drop.
     return true;
   }
   // seq > rxSeq + 1 → GAP: buffer, then ask the server to fill it
