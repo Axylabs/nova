@@ -29,6 +29,47 @@ export function sendControl<K extends ControlEventName>(
   sendFrame(state, state.bindings.encodeFrame(name, payload));
 }
 
+/**
+ * Send an encoded APP frame, queueing it until the socket is open.
+ *
+ * New-user friendly: `client.send(...)` immediately after `createClient(...)`
+ * (even before `connect()`) buffers the frame and flushes it once the socket
+ * opens — callers don't have to wait for the `connected` status. When
+ * `opts.queueSends` is `false` this throws `"ignex: client is not connected"`
+ * (the previous strict behaviour); a closed client always throws.
+ */
+export function sendFrameQueued(state: ClientState, frame: Uint8Array): void {
+  const ws = state.ws;
+  if (ws !== null && ws.readyState === WebSocket.OPEN) {
+    ws.send(frame as Uint8Array<ArrayBuffer>);
+    return;
+  }
+  if (state.closed) throw new Error("ignex: client is closed");
+  if (state.opts.queueSends === false) throw new Error("ignex: client is not connected");
+  state.pendingSends.push(frame);
+}
+
+/**
+ * Send every queued app frame in order. Called once the socket is open (after
+ * the `hello` + reconnect-subscribe control frames, which must precede app
+ * traffic). If the socket drops mid-flush the remainder stays queued.
+ */
+export function flushPendingSends(state: ClientState): void {
+  if (state.pendingSends.length === 0) return;
+  const ws = state.ws;
+  if (ws === null || ws.readyState !== WebSocket.OPEN) return;
+  const q = state.pendingSends;
+  state.pendingSends = [];
+  for (let i = 0; i < q.length; i++) {
+    const w = state.ws;
+    if (w !== ws || w.readyState !== WebSocket.OPEN) {
+      state.pendingSends = q.slice(i); // connection changed — put the rest back
+      return;
+    }
+    w.send(q[i]! as Uint8Array<ArrayBuffer>);
+  }
+}
+
 export function emitError(state: ClientState, err: Error): void {
   for (const cb of state.errorCbs) cb(err);
 }

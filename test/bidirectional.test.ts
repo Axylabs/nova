@@ -93,4 +93,52 @@ describe("bidirectional (client → server)", () => {
     client.close();
     server.stop();
   });
+
+  test("send() before connect() is queued and flushed once the socket opens", async () => {
+    const server = createServer({ port: 0, inbound: ["trade"] });
+    const received = new Promise<Events["trade"]>((resolve) => {
+      server.on("trade", (payload) => resolve(payload));
+    });
+    const client = createClient(`ws://localhost:${server.port}/ws`);
+    // send BEFORE connect() — buffered (default queueSends), never throws.
+    const t = trade();
+    client.send("trade", t);
+    client.connect();
+    const payload = await received;
+    expect(Bun.deepEquals(payload, t)).toBe(true);
+    client.close();
+    server.stop();
+  });
+
+  test("send() during a disconnect is queued and flushed on reconnect", async () => {
+    const port = 6500 + Math.floor(Math.random() * 300);
+    let server = createServer({ port, inbound: ["trade"] });
+    const url = `ws://localhost:${port}/ws`;
+    const client = createClient(url, { reconnect: { initialDelay: 50, maxDelay: 250, jitter: false } });
+    client.connect();
+    await waitFor(() => server.clientCount === 1);
+
+    // restart the server → client goes into reconnect; the socket is not open
+    server.stop(true);
+    await waitFor(() => client.currentStatus === "reconnecting");
+
+    const t = trade();
+    client.send("trade", t); // not connected yet — should queue, not throw
+
+    await Bun.sleep(80); // let the port free up
+    server = createServer({ port, inbound: ["trade"] });
+    const received = new Promise<Events["trade"]>((resolve) => {
+      server.on("trade", (payload) => resolve(payload));
+    });
+    const payload = await received; // flushed on the re-opened socket
+    expect(Bun.deepEquals(payload, t)).toBe(true);
+    client.close();
+    server.stop();
+  });
+
+  test("queueSends:false keeps the strict pre-connect throw", () => {
+    const client = createClient(`ws://localhost:1/ws`, { queueSends: false });
+    expect(() => client.send("trade", trade())).toThrow("client is not connected");
+    client.close();
+  });
 });

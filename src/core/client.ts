@@ -12,7 +12,14 @@
  */
 import type { Bindings, DefaultBindings, EventNameOf, EventsOf } from "../bindings/types";
 import { createClientState, setStatus, type ClientState, type ClientStatus, type IgnClientOptions } from "./client-state";
-import { handleMessage, emitError, sendControl, sendFrame, flushPending } from "./client-wire";
+import {
+  handleMessage,
+  emitError,
+  sendControl,
+  sendFrameQueued,
+  flushPendingSends,
+  flushPending,
+} from "./client-wire";
 import { startHeartbeat, stopHeartbeat } from "./client-heartbeat";
 import { scheduleReconnect } from "./client-reconnect";
 import { failAllPending, createRpcRequest } from "./client-rpc";
@@ -107,6 +114,9 @@ export function createClient<B extends Bindings = DefaultBindings>(
       });
       // re-subscribe topics from before the disconnect (server cleared them)
       for (const t of state.subscribedTopics) sendControl(state, "subscribe", { topic: t });
+      // deliver app events that were sent before the socket was open (send()
+      // queues by default — no need to wait for the connected status)
+      flushPendingSends(state);
       startHeartbeat(state);
     };
     ws.onmessage = (ev) => {
@@ -204,13 +214,14 @@ export function createClient<B extends Bindings = DefaultBindings>(
       }
       state.pending.clear();
       state.pendingFrom = 0;
+      state.pendingSends = []; // never delivered — drop the queued app frames
       failAllPending(state, new Error("ignex: client closed"));
       state.ws?.close();
       state.ws = null;
       setStatus(state, "closed");
     },
     send(name, payload) {
-      sendFrame(state, state.bindings.encodeFrame(name, payload));
+      sendFrameQueued(state, state.bindings.encodeFrame(name, payload));
     },
     request(name, payload, opts) {
       return createRpcRequest(

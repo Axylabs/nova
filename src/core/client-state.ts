@@ -33,6 +33,14 @@ export interface IgnClientOptions<B extends Bindings = DefaultBindings> {
   /** miss this many heartbeats before assuming the connection is dead, default 2 */
   heartbeatMisses?: number;
   /**
+   * Buffer app-event `send()` calls made before the socket is open and flush
+   * them automatically on connect (default true). This lets new users write
+   * `client.send(...)` right after `createClient(...)` — even before
+   * `connect()` — without waiting for the `connected` status. Set `false` to
+   * keep the strict behaviour of throwing `"ignex: client is not connected"`.
+   */
+  queueSends?: boolean;
+  /**
    * Gap-free delivery (requires the server started with `resume`): track the
    * server's per-connection delivery seqs, detect gaps, and automatically
    * request re-delivery via the `resume` control frame. Buffered out-of-order
@@ -77,6 +85,8 @@ export interface ClientState {
   pendingFrom: number;
   /** in-flight resume request flag (throttles re-asks) */
   resumeInFlight: boolean;
+  /** app frames queued while the socket was not open (flushed on open) */
+  pendingSends: Uint8Array[];
   /** force-flush timer for an unfillable gap */
   gapTimer: ReturnType<typeof setTimeout> | null;
   /** request/response: correlation id → pending call */
@@ -118,6 +128,7 @@ export function createClientState<B extends Bindings = DefaultBindings>(
     pending: new Map(),
     pendingFrom: 0,
     resumeInFlight: false,
+    pendingSends: [],
     gapTimer: null,
     rpcPending: new Map(),
     requestTimeoutMs: opts.requestTimeoutMs ?? 10_000,
