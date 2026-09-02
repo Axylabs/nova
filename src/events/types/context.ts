@@ -33,6 +33,8 @@ export interface EventContext<B extends Bindings = DefaultBindings> {
   emit<K extends EventNameOf<B>>(name: K, payload: EventsOf<B>[K], target?: EmitTarget): void;
   emitToGroup<K extends EventNameOf<B>>(group: string, name: K, payload: EventsOf<B>[K]): void;
   emitToUser<K extends EventNameOf<B>>(userId: string, name: K, payload: EventsOf<B>[K]): void;
+  /** Deliver to the user on every instance/service in the cluster mesh. */
+  emitToUserAnywhere<K extends EventNameOf<B>>(userId: string, name: K, payload: EventsOf<B>[K]): void;
   emitToClient<K extends EventNameOf<B>>(clientId: string, name: K, payload: EventsOf<B>[K]): void;
   emitToTopic<K extends EventNameOf<B>>(topic: string, name: K, payload: EventsOf<B>[K]): void;
 }

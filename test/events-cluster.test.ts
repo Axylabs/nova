@@ -153,6 +153,32 @@ describe("events cluster — cross-instance delivery", () => {
     s2.stop();
   });
 
+  test("emitToUserAnywhere reaches a user's sockets on a peer instance (full mesh)", async () => {
+    const { s1, s2, url1, url2 } = clusterPair();
+    // c1 anonymous, c2 (on the OTHER instance) acts on behalf of "u-1"
+    const c1 = await connect(url1);
+    const c2 = await connect(url2);
+    await waitFor(() => s1.clientCount === 1 && s2.clientCount === 1);
+    s2.events!.setUserId(c2.clientId, "u-1");
+
+    const got1: string[] = [];
+    const got2: string[] = [];
+    c1.on("quote", (q) => got1.push(q.symbol));
+    c2.on("quote", (q) => got2.push(q.symbol));
+
+    // full-mesh user emit from s1 → the peer instance (which holds u-1) delivers;
+    // the anonymous client on s1 must not receive it.
+    s1.events!.emitToUserAnywhere("u-1", "quote", quote("ANY"));
+    await waitFor(() => got2.includes("ANY"));
+    await Bun.sleep(50);
+    expect(got1).not.toContain("ANY");
+
+    c1.close();
+    c2.close();
+    s1.stop();
+    s2.stop();
+  });
+
   test("emitToGroup reaches group members on every instance", async () => {
     const { s1, s2, url1, url2 } = clusterPair();
     const c1 = await connect(url1);

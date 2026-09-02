@@ -38,6 +38,8 @@ export function createContextFactory<B extends Bindings>(deps: {
       emit: (name, payload, target) => hub.emit(name as never, payload as never, target),
       emitToGroup: (group, name, payload) => hub.emitToGroup(group, name as never, payload as never),
       emitToUser: (userId, name, payload) => hub.emitToUser(userId, name as never, payload as never),
+      emitToUserAnywhere: (userId, name, payload) =>
+        hub.emitToUserAnywhere(userId, name as never, payload as never),
       emitToClient: (clientId, name, payload) =>
         hub.emitToClient(clientId, name as never, payload as never),
       emitToTopic: (topic, name, payload) => hub.emitToTopic(topic, name as never, payload as never),

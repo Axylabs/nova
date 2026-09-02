@@ -23,6 +23,7 @@ export {
   emitToGroup,
   emitToTopic,
   emitToUser,
+  emitToUserAnywhere,
   getEventsHub,
   isEventsBound,
   off,

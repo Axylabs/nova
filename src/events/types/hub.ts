@@ -45,6 +45,11 @@ export interface EventsHub<B extends Bindings = DefaultBindings> {
   emitToTopic<K extends EventNameOf<B>>(topic: string, name: K, payload: EventsOf<B>[K]): void;
   emitToGroup<K extends EventNameOf<B>>(group: string, name: K, payload: EventsOf<B>[K]): void;
   emitToUser<K extends EventNameOf<B>>(userId: string, name: K, payload: EventsOf<B>[K]): void;
+  /**
+   * Deliver to the user on EVERY instance/service in the cluster mesh (full
+   * mesh, no presence routing) — reaches the user wherever they are.
+   */
+  emitToUserAnywhere<K extends EventNameOf<B>>(userId: string, name: K, payload: EventsOf<B>[K]): void;
   emitToClient<K extends EventNameOf<B>>(clientId: string, name: K, payload: EventsOf<B>[K]): void;
 
   // ── client records ("who is connected, on whose behalf") ──────────────

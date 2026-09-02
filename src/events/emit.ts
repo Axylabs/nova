@@ -146,7 +146,13 @@ export function createEmitter(opts: EmitterOptions): EmitEngine {
       if (cluster) {
         const msgId = crypto.randomUUID();
         const traceId = parentTraceId ?? "";
-        if (opts.routeInstances !== undefined && (target.type === "client" || target.type === "user")) {
+        // `user … anywhere: true` forces the full-mesh wildcard publish instead
+        // of presence routing — the user is reached on EVERY instance/service in
+        // the mesh, regardless of where presence thinks they are.
+        const routeable =
+          target.type === "client" ||
+          (target.type === "user" && target.anywhere !== true);
+        if (opts.routeInstances !== undefined && routeable) {
           // ROUTED targeted delivery: only the owning instances receive it
           const instances = opts.routeInstances(target);
           if (instances !== null) {

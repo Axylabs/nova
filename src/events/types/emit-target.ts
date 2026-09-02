@@ -13,6 +13,9 @@
  *   - `{ type: "topic", topic }` — subscribers of a topic (rooms + replay).
  *   - `{ type: "group", group }` — members of a server-side group.
  *   - `{ type: "user", userId }` — every socket acting on behalf of `userId`.
+ *   - `{ type: "user", userId, anywhere: true }` — same, but ALWAYS fanned out
+ *     to every instance/service in the cluster mesh (ignores presence routing), so
+ *     the user is reached no matter which instance holds their socket.
  *   - `{ type: "client", clientId }` — one specific connection.
  *
  * Local delivery is synchronous and allocation-free (the transport scratch +
@@ -23,7 +26,7 @@ export type EmitTarget =
   | { type: "broadcast" }
   | { type: "topic"; topic: string }
   | { type: "group"; group: string }
-  | { type: "user"; userId: string }
+  | { type: "user"; userId: string; anywhere?: true }
   | { type: "client"; clientId: string };
 
 export type EmitTargetKind = EmitTarget["type"];

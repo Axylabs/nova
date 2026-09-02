@@ -68,6 +68,18 @@ export function emitToUser<K extends EventName>(userId: string, name: K, payload
   requireHub().emitToUser(userId, name as never, payload as never);
 }
 
+/**
+ * Deliver to the user on EVERY instance/service in the cluster mesh (full
+ * mesh, no presence routing) — reaches the user wherever they are connected.
+ */
+export function emitToUserAnywhere<K extends EventName>(
+  userId: string,
+  name: K,
+  payload: Events[K],
+): void {
+  requireHub().emitToUserAnywhere(userId, name as never, payload as never);
+}
+
 export function emitToClient<K extends EventName>(
   clientId: string,
   name: K,

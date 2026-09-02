@@ -364,6 +364,14 @@ export function createEventsHub<B extends Bindings = DefaultBindings>(
     emitToUser(userId, name, payload) {
       api.emit(name, payload, { type: "user", userId });
     },
+    /**
+     * Deliver to the user on EVERY instance/service in the cluster mesh — an
+     * explicit full-mesh emit (no presence routing). Use when the user may be
+     * connected to any service sharing the cluster transport.
+     */
+    emitToUserAnywhere(userId, name, payload) {
+      api.emit(name, payload, { type: "user", userId, anywhere: true });
+    },
     emitToClient(clientId, name, payload) {
       api.emit(name, payload, { type: "client", clientId });
     },
