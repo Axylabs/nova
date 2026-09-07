@@ -1,0 +1,13 @@
+# zizmor configuration — read by the qlty zizmor plugin (file must be named
+# `zizmor.yml`, not `.zizmor.yml`).
+#
+# cache-poisoning (ignored in the tag-push publish pipeline): the caches there
+# belong to pinned, official toolchain setup actions (oven-sh/setup-bun,
+# actions-rust-lang/setup-rust-toolchain). Their contents come from official
+# release channels, not PR-controlled input, and this workflow has no
+# pull_request trigger — so the cache-poisoning surface flagged by the
+# heuristic does not apply.
+rules:
+  cache-poisoning:
+    ignore:
+      - publish.yml

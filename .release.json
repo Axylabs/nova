@@ -1,0 +1,11 @@
+{
+  "product": "nova",
+  "type": "single",
+  "verify": ["bun run verify"],
+  "checks": ["bun run pack:check"],
+  "publish": {
+    "strategy": "local",
+    "manager": "bun",
+    "command": "bun publish --access {access} --tag {distTag}"
+  }
+}

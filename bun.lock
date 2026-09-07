@@ -15,8 +15,12 @@
         "oxlint": "^1.78.0",
       },
       "peerDependencies": {
+        "ioredis": "*",
         "typescript": "^7",
       },
+      "optionalPeers": [
+        "ioredis",
+      ],
     },
   },
   "packages": {

@@ -4,6 +4,10 @@
 pre-commit:
   parallel: true
   commands:
+    qlty:
+      # Git-aware umbrella check (oxc + actionlint + zizmor + trufflehog); only
+      # reports issues on new/changed lines. Install tools once: `qlty install`.
+      run: qlty check --no-formatters
     oxlint:
       glob: "*.{js,ts,jsx,tsx,json,jsonc}"
       run: bunx oxlint {staged_files}
