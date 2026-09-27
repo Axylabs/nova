@@ -17,6 +17,8 @@ import {
   expectedArtifacts,
   stageArtifacts,
 } from "../scripts/prepublish";
+import { cargoInvocation } from "../scripts/build-prebuild";
+import { targetFromTriple } from "../src/native/targets";
 import { cargoField, changelogProblems, targetProblems, undeclaredTargets } from "../scripts/check-version";
 
 const repoRoot = join(import.meta.dir, "..");
@@ -108,6 +110,33 @@ describe("prepublish: artifact staging", () => {
 
   test("a checkout with no artifacts/ directory stages nothing", () => {
     expect(stageArtifacts(tempRoot(), join(tempRoot(), "artifacts"))).toEqual([]);
+  });
+});
+
+describe("build-prebuild: cargo invocation", () => {
+  const musl = targetFromTriple("aarch64-unknown-linux-musl")!;
+  const gnu = targetFromTriple("x86_64-unknown-linux-gnu")!;
+
+  test("host builds use plain `cargo build --release` without --target", () => {
+    const { command, args } = cargoInvocation(gnu, { profile: "release", zigbuild: false }, false);
+    expect(command).toBe("cargo");
+    expect(args).toEqual(["build", "--release", "--manifest-path", "rust/Cargo.toml"]);
+  });
+
+  test("explicit targets pass --target", () => {
+    const { args } = cargoInvocation(gnu, { profile: "release", zigbuild: false }, true);
+    expect(args).toContain("--target");
+    expect(args).toContain("x86_64-unknown-linux-gnu");
+  });
+
+  test("musl cross builds use the `cargo zigbuild` SUBCOMMAND", () => {
+    const { command, args } = cargoInvocation(musl, { profile: "release", zigbuild: true }, true);
+    // `cargo-zigbuild` is a cargo subcommand: invoking the binary directly with
+    // `build` broke the aarch64-musl CI job, so assert the subcommand form.
+    expect(command).toBe("cargo");
+    expect(args[0]).toBe("zigbuild");
+    expect(args).not.toContain("cargo-zigbuild");
+    expect(args).toContain("aarch64-unknown-linux-musl");
   });
 });
 

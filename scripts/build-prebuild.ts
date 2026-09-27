@@ -44,6 +44,30 @@ interface Options {
   zigbuild: boolean;
 }
 
+/** The cargo invocation for a target (pure — unit-tested).
+ *
+ * `cargo-zigbuild` is a cargo SUBCOMMAND: the supported invocation is
+ * `cargo zigbuild …` (the installer puts `cargo-zigbuild` on PATH and cargo
+ * dispatches to it). Running the binary directly as `cargo-zigbuild build …`
+ * is not a documented usage — that is what broke the aarch64-musl CI job.
+ */
+export function cargoInvocation(
+  target: NativeTarget,
+  options: Pick<Options, "profile" | "zigbuild">,
+  useTargetFlag: boolean,
+): { command: string; args: string[] } {
+  return {
+    command: "cargo",
+    args: [
+      options.zigbuild ? "zigbuild" : "build",
+      ...(options.profile === "release" ? ["--release"] : []),
+      ...(useTargetFlag ? ["--target", target.triple] : []),
+      "--manifest-path",
+      join("rust", "Cargo.toml"),
+    ],
+  };
+}
+
 function parseArgs(argv: string[]): Options {
   const value = (name: string): string | undefined => {
     const i = argv.indexOf(`--${name}`);
@@ -95,49 +119,49 @@ function buildOutputs(target: NativeTarget, profile: Options["profile"]): string
 }
 
 function runCargo(target: NativeTarget, options: Options, useTargetFlag: boolean): void {
-  const cargo = options.zigbuild ? "cargo-zigbuild" : "cargo";
-  const args = [
-    "build",
-    ...(options.profile === "release" ? ["--release"] : []),
-    ...(useTargetFlag ? ["--target", target.triple] : []),
-    "--manifest-path",
-    join("rust", "Cargo.toml"),
-  ];
-  console.log(`\n⚙  ${cargo} ${args.join(" ")}`);
-  const result = spawnSync(cargo, args, { cwd: root, stdio: "inherit" });
+  const { command, args } = cargoInvocation(target, options, useTargetFlag);
+  console.log(`\n⚙  ${command} ${args.join(" ")}`);
+  const result = spawnSync(command, args, { cwd: root, stdio: "inherit" });
   if (result.error !== undefined) {
     die(
-      `could not run ${cargo} (${result.error.message}).` +
+      `could not run \`${command} ${args[0]}\` (${result.error.message}).` +
         (options.zigbuild ? " Install it: cargo install cargo-zigbuild (+ zig on PATH)." : ""),
     );
   }
   if (result.status !== 0) {
-    die(`${cargo} build failed (exit ${result.status ?? "?"}).`);
+    die(`\`${command} ${args[0]}\` failed (exit ${result.status ?? "?"}).`);
   }
 }
 
-const options = parseArgs(process.argv.slice(2));
-const target = resolveTarget(options.target);
-const file = libName(target.platform);
+function main(): void {
+  const options = parseArgs(process.argv.slice(2));
+  const target = resolveTarget(options.target);
+  const file = libName(target.platform);
 
-if (options.build) {
-  // Only pass `--target` when it was requested explicitly: the host build must
-  // not require that triple's std to be installed.
-  runCargo(target, options, options.target !== undefined);
+  if (options.build) {
+    // Only pass `--target` when it was requested explicitly: the host build must
+    // not require that triple's std to be installed.
+    runCargo(target, options, options.target !== undefined);
+  }
+
+  const candidates =
+    options.libDir !== undefined
+      ? [join(options.libDir, file)]
+      : buildOutputs(target, options.profile);
+  const built = candidates.find((candidate) => existsSync(candidate));
+  if (built === undefined) {
+    die(
+      `no cdylib found for ${target.triple}. Looked in:\n  ${candidates.join("\n  ")}\n` +
+        `Build it: bun run build:rust${options.target !== undefined ? ` -- --target ${target.triple}` : ""}`,
+    );
+  }
+
+  const outDir = prebuildDir(root, target.tag);
+  mkdirSync(outDir, { recursive: true });
+  copyFileSync(built, join(outDir, file));
+  console.log(`✔ Staged ${file} → prebuilds/${target.tag}/${file}`);
+  console.log(`  target ${target.triple} (${options.profile})`);
 }
 
-const candidates = options.libDir !== undefined ? [join(options.libDir, file)] : buildOutputs(target, options.profile);
-const built = candidates.find((candidate) => existsSync(candidate));
-if (built === undefined) {
-  die(
-    `no cdylib found for ${target.triple}. Looked in:\n  ${candidates.join("\n  ")}\n` +
-      `Build it: bun run build:rust${options.target !== undefined ? ` -- --target ${target.triple}` : ""}`,
-  );
-}
-
-const outDir = prebuildDir(root, target.tag);
-mkdirSync(outDir, { recursive: true });
-copyFileSync(built, join(outDir, file));
-console.log(`✔ Staged ${file} → prebuilds/${target.tag}/${file}`);
-console.log(`  target ${target.triple} (${options.profile})`);
+if (import.meta.main) main();
 
