@@ -12,7 +12,7 @@ all platforms, like the sibling `castrum` package.
 | --- | --- | --- |
 | `main` / `module` / `types` | `./index.ts` | source entrypoint (Bun-native) |
 | `exports` | `@ignex/nova` → `index.ts`; `@ignex/nova/server` → `public/server.ts`; `@ignex/nova/client` → `public/client.ts`; `@ignex/nova/nats` → `public/nats.ts`; `@ignex/nova/events` → `public/events.ts`; `@ignex/nova/bindings` → `public/bindings.ts`; `@ignex/nova/generate` → `public/generate.ts`; `@ignex/nova/internal` → `public/internal.ts`; `@ignex/nova/package.json` → `package.json` | typed subpath API |
-| `files` | `index.ts`, `public`, `src`, `rust`, `rust-toolchain.toml`, `prebuilds`, `docs`, `README.md`, `CHANGELOG.md`, `LICENSE` | everything consumers need, nothing they don't |
+| `files` | `index.ts`, `public`, `src`, `rust`, `rust-toolchain.toml`, `prebuilds`, `scripts/postinstall.ts`, `docs`, `README.md`, `CHANGELOG.md`, `LICENSE` | everything consumers need, nothing they don't (`scripts/postinstall.ts` must ship because `postinstall` runs on consumer installs) |
 | `nova.targets` | the 7 Rust triples below | **the multi-platform contract** — build matrix, loader, pre-publish gate and `check:version` all derive from it |
 | `publishConfig` | `{ "access": "public" }` | scoped packages are restricted by default — `access: public` publishes `@ignex/nova` publicly |
 | `engines` | `{ "bun": ">=1.4" }` | Bun-only runtime |

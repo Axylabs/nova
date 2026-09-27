@@ -47,6 +47,8 @@ const REQUIRED = [
   // pinned toolchain — consumers rebuilding the addon from source get the same
   // compiler the release artifacts were built with
   "rust-toolchain.toml",
+  // the ONLY scripts/ file that must ship: `postinstall` runs in consumers
+  "scripts/postinstall.ts",
   "docs/wire-format.md",
   "docs/publishing.md",
   "CHANGELOG.md",
@@ -66,6 +68,9 @@ const FORBIDDEN_PREFIXES = [
   "scripts/",
   "artifacts/",
 ];
+
+/** Paths that are allowed even though a forbidden prefix matches them. */
+const FORBIDDEN_EXCEPTIONS = new Set(["scripts/postinstall.ts"]);
 
 const PACKED_LINE = /^packed\s+\S+\s+(.+)$/gm;
 
@@ -106,7 +111,10 @@ if (missing.length > 0) {
   die(`required files missing from the tarball:\n  ${missing.join("\n  ")}`);
 }
 
-const leaks = paths.filter((p) => FORBIDDEN_PREFIXES.some((prefix) => p.startsWith(prefix)));
+const leaks = paths.filter(
+  (p) =>
+    !FORBIDDEN_EXCEPTIONS.has(p) && FORBIDDEN_PREFIXES.some((prefix) => p.startsWith(prefix)),
+);
 if (leaks.length > 0) {
   die(`unexpected files in the tarball (should be excluded):\n  ${leaks.join("\n  ")}`);
 }
