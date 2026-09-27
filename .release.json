@@ -3,9 +3,22 @@
   "type": "single",
   "verify": ["bun run verify"],
   "checks": ["bun run pack:check"],
+  "versionFiles": [
+    {
+      "type": "regex",
+      "file": "rust/Cargo.toml",
+      "pattern": "(\\[package\\][^\\[]*?version\\s*=\\s*\")[^\"]+(\")",
+      "sub": "$1__VERSION__$2"
+    },
+    {
+      "type": "changelog",
+      "file": "CHANGELOG.md",
+      "unreleased": "## [Unreleased]"
+    }
+  ],
   "publish": {
-    "strategy": "local",
+    "strategy": "ci",
     "manager": "bun",
-    "command": "bun publish --access {access} --tag {distTag}"
+    "command": "bun run build && IGNEX_PUBLISH_ALLOW_PARTIAL=1 bun publish --access {access} --tag {distTag}"
   }
 }

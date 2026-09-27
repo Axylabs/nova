@@ -1,133 +1,288 @@
 name: publish
 
 on:
+  push:
+    tags:
+      - "v*"
   workflow_dispatch:
     inputs:
       version:
-        description: "Exact version to publish (empty = use package.json version)"
+        description: "Expected version — guard, must equal package.json (empty = skip the check)"
         required: false
         default: ""
       dist_tag:
         description: "npm dist-tag"
         required: false
         default: "latest"
-  push:
-    tags:
-      - "v*"
 
 permissions:
   contents: read
 
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
 jobs:
-  # Build + stage the Rust cdylib into `prebuilds/<platform>-<arch>/` per OS.
-  # Consumers on these platforms get a working addon with zero build steps;
-  # other platforms rebuild from the shipped rust/ source or set IGNEX_FFI_PATH.
-  build-prebuilds:
+  # ── Generated wire stack (shared by every build target) ──────────
+  # `flatc`'s Rust tables are NOT committed (`rust/src/generated/` is
+  # gitignored), so the crate cannot compile from a bare checkout. Rather than
+  # installing the pinned compiler on all seven runners, generate ONCE here and
+  # hand the output to the matrix — which also guarantees every platform
+  # compiles byte-identical generated code (no wire drift between artifacts).
+  generate:
+    name: Generate wire stack
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - name: Install the pinned flatc
+        run: |
+          bash scripts/install-flatc.sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Generate (TypeBox → .fbs → flatc → glue)
+        run: bun run generate
+      - name: Upload the generated wire stack
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: generated-wire
+          path: |
+            rust/src/generated/
+            src/generated/
+          if-no-files-found: error
+
+  # ── Multi-platform addon artifacts ───────────────────────────────
+  # One artifact per target in package.json "nova.targets" (the same matrix the
+  # loader and scripts/prepublish.ts use). Recipes, mirroring castrum's:
+  #   * native runners build darwin/windows + x86_64-linux-gnu
+  #   * linux/aarch64-gnu cross-compiles with the distro gcc-aarch64 toolchain
+  #   * musl targets use `cargo zigbuild` (no container, no musl sysroot needed)
+  # `scripts/build-prebuild.ts --target` stages `prebuilds/<tag>/<lib>` and
+  # fails loudly if the cdylib is missing, so a green job always has an artifact.
+  build:
+    name: Build ${{ matrix.tag }}
+    runs-on: ${{ matrix.os }}
+    needs: [generate]
+    timeout-minutes: 30
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, macos-13]
-    runs-on: ${{ matrix.os }}
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            tag: linux-x64-gnu
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            tag: linux-arm64-gnu
+            apt: gcc-aarch64-linux-gnu
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            tag: linux-x64-musl
+            zigbuild: "true"
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-latest
+            tag: linux-arm64-musl
+            zigbuild: "true"
+          - target: x86_64-apple-darwin
+            os: macos-13
+            tag: darwin-x64
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            tag: darwin-arm64
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            tag: win32-x64-msvc
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-        with:
-          bun-version: latest
-
+      # Reads `rust-toolchain.toml`; `cache: false` because the action's built-in
+      # rust-cache runs `cargo metadata` at the repo root (no Cargo.toml there —
+      # the crate is in rust/), which errors on every run.
       - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
-
-      - name: Install flatbuffers compiler
-        shell: bash
-        run: |
-          if [ "$RUNNER_OS" = "Linux" ]; then
-            sudo apt-get update && sudo apt-get install -y flatbuffers-compiler
-          else
-            brew install flatbuffers
-          fi
-
-      - name: Install dependencies
-        run: bun install
-
-      - name: Generate (TypeBox → .fbs → flatc → glue)
-        run: bun run generate
-
-      - name: Build + stage prebuild addon
-        run: bun run prebuild
-
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: prebuild-${{ matrix.os }}
+          cache: false
+      - name: Add the target's std
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: rustup target add "$TARGET"
+      - name: Install cross C toolchain (linux/aarch64-gnu)
+        if: matrix.apt
+        env:
+          APT_PACKAGES: ${{ matrix.apt }}
+        run: sudo apt-get update && sudo apt-get install -y $APT_PACKAGES
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
+        if: matrix.zigbuild
+        with:
+          version: 0.15.2
+      - uses: taiki-e/install-action@fa23953489c080190314742a9b907f8e97c6767c # v2
+        if: matrix.zigbuild
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        with:
+          tool: cargo-zigbuild
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Download the generated wire stack
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: generated-wire
+          path: .
+      - name: Build + stage the target addon
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+          ZIGBUILD: ${{ matrix.zigbuild }}
+          # Only the aarch64-gnu entry uses these (the crate has no C sources,
+          # so the linker is the only thing that must be pointed at the cross gcc).
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+          CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
+        run: |
+          if [ "$ZIGBUILD" = "true" ]; then
+            bun scripts/build-prebuild.ts --target "$TARGET" --zigbuild
+          else
+            bun scripts/build-prebuild.ts --target "$TARGET"
+          fi
+      - name: Upload addon artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: prebuild-${{ matrix.tag }}
           path: prebuilds/
           if-no-files-found: error
 
+  # ── Publish to npm ───────────────────────────────────────────────
+  # Downloads every platform artifact, re-runs the full gate (typecheck, lint,
+  # version/target consistency, tests), enforces the multi-platform completeness
+  # gate (`prepublish:verify` → every declared target staged), then publishes.
+  #
+  # The gate runs HERE rather than via `needs:` because the standards jobs live
+  # in ci.yml (a `needs:` cannot cross workflows); `prepublishOnly` therefore
+  # re-runs `verify` — a tag can never ship past a red gate.
   publish:
-    needs: build-prebuilds
+    name: Publish to npm
     runs-on: ubuntu-latest
+    needs: [build]
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    timeout-minutes: 30
     permissions:
       contents: read
-      id-token: write # for npm provenance
+      # npm Trusted Publishing (OIDC) + build provenance attestation.
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      # No registry token is REQUIRED: npm prefers OIDC (trusted publishing)
+      # when it is configured and falls back to `secrets.NPM_TOKEN` otherwise.
+      # This needs npm >= 11.5.2, which is why the CLI is upgraded + asserted.
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          bun-version: latest
-
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - name: Ensure npm supports OIDC trusted publishing (>= 11.5.2)
+        run: |
+          npm install -g npm@latest
+          node -e 'const v=require("node:child_process").execSync("npm --version").toString().trim().split(".").map(Number); if(v[0]<11||(v[0]===11&&v[1]<5)){console.error(`::error::npm ${v.join(".")} is too old for OIDC trusted publishing (need >= 11.5.2)`);process.exit(1)} console.log(`npm ${v.join(".")} supports trusted publishing`)'
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
       - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
-
-      - name: Install flatbuffers compiler
-        run: sudo apt-get update && sudo apt-get install -y flatbuffers-compiler
-
+        with:
+          cache: false
+      # The publish job regenerates + re-verifies before packing, so it needs
+      # the pinned compiler too (scripts/generate.ts enforces the version).
+      - name: Install the pinned flatc
+        run: |
+          bash scripts/install-flatc.sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - name: Install dependencies
-        run: bun install
-
-      - name: Download prebuilds
+        run: bun install --frozen-lockfile
+      - name: Download all platform addons
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           path: artifacts
           pattern: prebuild-*
-
-      - name: Merge prebuilds into prebuilds/
-        run: |
-          mkdir -p prebuilds
-          for dir in artifacts/prebuild-*/prebuilds/*; do
-            [ -d "$dir" ] || continue
-            tag="$(basename "$dir")"
-            mkdir -p "prebuilds/$tag"
-            cp -r "$dir/." "prebuilds/$tag/"
-          done
-          rm -rf artifacts
-          echo "→ prebuilds:" && ls -R prebuilds
-
-      - name: Set version from tag (push)
+          merge-multiple: true
+      - name: Show the staged artifacts
+        run: ls -R artifacts
+      - name: Generate SBOM (dependency inventory)
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        with:
+          path: ./
+          format: spdx-json
+          artifact-name: nova-sbom.spdx.json
+      # The version comes from the release COMMIT, not from this workflow:
+      # `bun run release` bumps package.json + rust/Cargo.toml + CHANGELOG.md
+      # together and tags that commit, and `bun run check:version` (inside
+      # `verify` below) asserts all three agree. So the tag must match — a
+      # mismatch means the tag was pushed without the release flow.
+      - name: Verify the release version matches the tag
         if: github.ref_type == 'tag'
         env:
           REF_NAME: ${{ github.ref_name }}
         run: |
-          node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json','utf8'));p.version=process.env.REF_NAME.replace(/^v/,'');fs.writeFileSync('package.json',JSON.stringify(p,null,2)+'\n')"
-
-      - name: Set version from input (workflow_dispatch)
+          node -e '
+            const fs = require("node:fs");
+            const tag = process.env.REF_NAME.replace(/^v/, "");
+            const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
+            if (pkg.version !== tag) {
+              console.error(`::error::tag v${tag} does not match package.json version ${pkg.version} — run \`bun run release\` and push that tag`);
+              process.exit(1);
+            }
+            console.log(`tag v${tag} matches package.json`);
+          '
+      # Optional dispatch guard: an explicit version must be the one in the
+      # commit (publishing a different version would desync Cargo.toml/CHANGELOG).
+      - name: Verify the requested version matches the commit
         if: github.event_name == 'workflow_dispatch' && github.event.inputs.version != ''
         env:
           INPUT_VERSION: ${{ github.event.inputs.version }}
         run: |
-          node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json','utf8'));p.version=process.env.INPUT_VERSION;fs.writeFileSync('package.json',JSON.stringify(p,null,2)+'\n')"
-
-      - name: Verify + tarball check
+          node -e '
+            const fs = require("node:fs");
+            const requested = process.env.INPUT_VERSION;
+            const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
+            if (pkg.version !== requested) {
+              console.error(`::error::input version ${requested} does not match package.json version ${pkg.version} — check out the release commit (or bump with \`bun run release\`)`);
+              process.exit(1);
+            }
+            console.log(`requested version ${requested} matches package.json`);
+          '
+      # Regenerates the flatc artifacts (gitignored, so they must be rebuilt),
+      # then releases the full gate: typecheck + lint + check:version + tests,
+      # and finally the multi-platform completeness gate over ./artifacts.
+      - name: Verify + multi-platform completeness gate
         run: |
           bun run generate
           bun run verify
-          bun run pack:check
-
+          bun run prepublish:verify
+      # Reports the OIDC environment (never the token) so a broken trusted-
+      # publisher exchange is diagnosable from the log.
+      - name: Report the OIDC environment
+        run: |
+          echo "id-token request url   : ${ACTIONS_ID_TOKEN_REQUEST_URL:+present}"
+          echo "id-token request token : ${ACTIONS_ID_TOKEN_REQUEST_TOKEN:+present}"
+          echo "expected claim         : ${{ github.repository }} / .github/workflows/publish.yml @ ${{ github.ref }}"
       - name: Publish to npm
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           DIST_TAG: ${{ github.event.inputs.dist_tag || 'latest' }}
-        run: |
-          echo "//registry.npmjs.org/:_authToken=$NODE_AUTH_TOKEN" > "$HOME/.npmrc"
-          bun publish --tag "$DIST_TAG" --access public
+        # `--provenance` makes the OIDC attestation mandatory; without it a
+        # broken exchange is invisible (npm silently falls back to the token).
+        run: npm publish --access public --tag "$DIST_TAG" --provenance
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@8beda2b7ed98355c0e97c0a63bec38ae472e66c4 # v4
+        with:
+          subject-path: '${{ github.workspace }}/artifacts/prebuilds/**/*'

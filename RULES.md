@@ -16,6 +16,24 @@ task-specific runbooks; `docs/ai/LOCAL_DEV.md` covers cross-repo local dev.
   are fallbacks. Before writing a TS hot loop, check whether it belongs in
   `rust/src/` or the generated encoders. Perf is gated by `bench/BASELINE.md`
   (>5% drift on the gate numbers is a failure).
+- **The Rust toolchain is pinned** (`rust-toolchain.toml`, currently 1.98.1)
+  so local, CI and consumer rebuilds use the same compiler — bump it
+  deliberately, only after `rust:fmt` + `rust:clippy` + `test:rust` + `verify`
+  are green on the new channel. Distro toolchains ignore the pin by design.
+- **`flatc` is pinned too** (`package.json#nova.flatc`, installed by
+  `bash scripts/install-flatc.sh`). It generates BOTH sides of the wire stack,
+  so its version must track the `flatbuffers` crate/npm range: a different
+  major version emits Rust that does not compile against the crate (this broke
+  CI once — apt's `flatbuffers-compiler` vs the 25.x crate).
+  `scripts/generate.ts` fails on a major-version mismatch; never "fix" that by
+  loosening the check — install the pinned compiler.
+- **Published artifacts are baseline-CPU** — never commit `-C target-cpu=…` or
+  `RUSTFLAGS` to `.cargo/config.toml`; machine-local SIMD is a per-invocation
+  env override for benchmarking only (see the file's comments).
+- **Rust lint gates cover the hand-written surface only**: `bun run rust:fmt`
+  (rustfmt via `skip_children`) and `bun run rust:clippy` (`-D warnings`).
+  flatc's generated tables carry their own lint allows, emitted by
+  `scripts/generate.ts` into `rust/src/generated/mod.rs`.
 
 ## 2. FFI to Rust: `cstring` / zero-text-encoding — never hand codecs
 
@@ -68,14 +86,18 @@ task-specific runbooks; `docs/ai/LOCAL_DEV.md` covers cross-repo local dev.
 
 ## 6. Tests ship with code
 
-- `bun test` (~234 cases across 29 files): api, auth, backpressure,
+- `bun test` (~330 cases across 38 files): api, auth, backpressure,
   bidirectional, bindings-gen, byte-buffer-pool, direct, e2e, efficiency,
   events, events-cluster, ffi, groups, int64, integrity, loader, metrics,
   nats-bridge, nats-integration (opt-in via `NATS_URL`), performance,
-  reconnect, ring, rooms, roundtrip, security, security-hardening, targeting,
-  trace, wire.
+  postinstall, reconnect, release-gate, ring, rooms, roundtrip, security,
+  security-hardening, targets, targeting, trace, wire.
+  `postinstall`/`release-gate`/`targets` guard the multi-platform release
+  contract (matrix mapping, artifact gate, source-build fallback).
 - FFI-backed paths need `bun run generate` + `cargo build --release` first.
 - Perf-sensitive changes: re-run `bench:serialize` + `bench:throughput`.
+- Release-flow changes: re-run `bun run check:version`, `bun run pack:check`
+  and `bun run verify:install` (the last one needs the network for deps).
 
 ## 7. Docs discipline (anti-hallucination)
 
@@ -87,7 +109,30 @@ task-specific runbooks; `docs/ai/LOCAL_DEV.md` covers cross-repo local dev.
 - The npm package name is **`@ignex/nova`** (never `ignex-nova` in install/
   import docs — `ignex-nova` only names the repo/Rust crate).
 
-## 8. Local development with core projects (maintainers & AI only)
+## 8. Multi-platform release contract
+
+- A native target exists in **exactly two places**: `package.json#nova.targets`
+  (the declaration the build matrix and the pre-publish gate consume) and
+  `NATIVE_TARGETS` in `src/native/targets.ts` (the triple ↔
+  `prebuilds/<tag>/<lib>` mapping the loader uses). Add both in the same
+  change — `bun run check:version` fails on drift in either direction.
+- `prebuilds/` is staged output (`bun run prebuild`, `prepack`, CI); the tag
+  scheme is `[<platform>-<arch>[-<libc>]]` per napi-rs convention, and the bare
+  legacy tag stays loadable. Never stage an artifact under a tag the matrix
+  does not know.
+- **A release ships every declared target.** `bun run prepublish:verify`
+  hard-fails on a missing/empty artifact; `IGNEX_PUBLISH_ALLOW_PARTIAL=1` (used
+  by `bun run release:manual`) is the only way to publish a partial tarball,
+  and it must stay a loud, deliberate choice.
+- Releases are **CI-published** (`publish.strategy: "ci"`): `bun run release`
+  bumps + tags locally, the `v*` tag builds one addon per target and publishes.
+  Version bumps sync `package.json`, `rust/Cargo.toml` and `CHANGELOG.md`
+  together (`check:version` gates it).
+- The consumer rebuild path is part of the contract: the `rust/` source, the
+  pinned `rust-toolchain.toml` and the `postinstall` fallback must keep working
+  (`bun run verify:install` proves the installed-tarball layout).
+
+## 9. Local development with core projects (maintainers & AI only)
 
 - Core IgnEX packages live one directory back in `/home/adeel/poc/`. Use
   `bun link @ignex/nova` (from `../ignex-nova`) when a consumer needs the

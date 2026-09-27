@@ -16,7 +16,6 @@ fn main() {
             bid_size: 100,
             ask_size: 200,
             ts: 1720000000000,
-            ..Default::default()
         },
     );
     fbb.finish_size_prefixed(quote, Some("IGNX"));

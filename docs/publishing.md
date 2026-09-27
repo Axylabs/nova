@@ -1,9 +1,10 @@
-# Publishing ignex-nova to npm
+# Publishing @ignex/nova to npm
 
-ignex-nova is published **from source** — the tarball contains TypeScript
+`@ignex/nova` is published **from source**: the tarball contains TypeScript
 entrypoints (Bun runs `.ts` natively, so consumers need no build step), the
-generated artifacts, the `rust/` source, and prebuilt native addons. This
-mirrors how the `@ignex/*` packages in the Ignex monorepo are shipped.
+generated artifacts, the `rust/` source, the pinned `rust-toolchain.toml`, and
+**prebuilt native addons for every target in the release matrix** — one tarball,
+all platforms, like the sibling `castrum` package.
 
 ## Package layout (`package.json`)
 
@@ -11,109 +12,213 @@ mirrors how the `@ignex/*` packages in the Ignex monorepo are shipped.
 | --- | --- | --- |
 | `main` / `module` / `types` | `./index.ts` | source entrypoint (Bun-native) |
 | `exports` | `@ignex/nova` → `index.ts`; `@ignex/nova/server` → `public/server.ts`; `@ignex/nova/client` → `public/client.ts`; `@ignex/nova/nats` → `public/nats.ts`; `@ignex/nova/events` → `public/events.ts`; `@ignex/nova/bindings` → `public/bindings.ts`; `@ignex/nova/generate` → `public/generate.ts`; `@ignex/nova/internal` → `public/internal.ts`; `@ignex/nova/package.json` → `package.json` | typed subpath API |
-| `files` | `index.ts`, `public`, `src`, `rust`, `prebuilds`, `docs`, `README.md`, `LICENSE` | everything consumers need, nothing they don't |
+| `files` | `index.ts`, `public`, `src`, `rust`, `rust-toolchain.toml`, `prebuilds`, `docs`, `README.md`, `CHANGELOG.md`, `LICENSE` | everything consumers need, nothing they don't |
+| `nova.targets` | the 7 Rust triples below | **the multi-platform contract** — build matrix, loader, pre-publish gate and `check:version` all derive from it |
 | `publishConfig` | `{ "access": "public" }` | scoped packages are restricted by default — `access: public` publishes `@ignex/nova` publicly |
 | `engines` | `{ "bun": ">=1.4" }` | Bun-only runtime |
 | `sideEffects` | `false` | safe to tree-shake / mark in bundlers |
 
-`rust/.npmignore` keeps `rust/target/` (build output), `Cargo.lock` and the
-dev example out of the tarball while still shipping the Rust **source** so
-consumers can rebuild the addon on any platform.
+`rust/.npmignore` keeps `rust/target/` (build output), `Cargo.lock` and the dev
+example out of the tarball while still shipping the Rust **source** so consumers
+can rebuild the addon on any platform.
+
+## The native target matrix
+
+`package.json#nova.targets` declares the triples; `src/native/targets.ts` maps
+each triple to its staged artifact (`prebuilds/<tag>/<lib>`) and to the tags a
+host probes at runtime. Both must agree — `bun run check:version` fails on drift
+in either direction.
+
+| Triple | Tag | Artifact |
+| --- | --- | --- |
+| `x86_64-unknown-linux-gnu` | `linux-x64-gnu` | `libignex_ffi.so` |
+| `aarch64-unknown-linux-gnu` | `linux-arm64-gnu` | `libignex_ffi.so` |
+| `x86_64-unknown-linux-musl` | `linux-x64-musl` | `libignex_ffi.so` |
+| `aarch64-unknown-linux-musl` | `linux-arm64-musl` | `libignex_ffi.so` |
+| `x86_64-apple-darwin` | `darwin-x64` | `libignex_ffi.dylib` |
+| `aarch64-apple-darwin` | `darwin-arm64` | `libignex_ffi.dylib` |
+| `x86_64-pc-windows-msvc` | `win32-x64-msvc` | `ignex_ffi.dll` |
+
+All artifacts are **baseline-CPU** builds (no `-C target-cpu`): a published
+addon runs on any host of its triple. `.cargo/config.toml` documents that policy
+and how to opt into machine-local SIMD for benchmarking only.
+
+### Building + staging one target
+
+```bash
+bun run prebuild                                   # host target (used by `prepack`)
+bun scripts/build-prebuild.ts --target <triple>    # one target (CI)
+bun scripts/build-prebuild.ts --target <triple> --zigbuild   # musl cross build
+bun scripts/build-prebuild.ts --lib-dir <dir>      # stage an already-built cdylib
+```
+
+The script stages `prebuilds/<tag>/<lib>` from
+`rust/target/[<triple>/]release/` and fails loudly when the cdylib is missing.
+
+### Loader resolution (runtime)
+
+`src/native/loader.ts` (matrix logic in `src/native/targets.ts`):
+
+1. `IGNEX_FFI_PATH` env override — honored **exclusively** (a typo fails loudly,
+   it never silently loads another addon)
+2. in-repo dev builds: `<pkg>/rust/target[/<triple>]/release/<lib>`
+3. packaged layout: `<pkg>/prebuilds/<tag>/<lib>` for every loadable tag, best
+   match first — `linux-x64-gnu` → `linux-x64-musl` → legacy `linux-x64` on
+   glibc; musl-first on musl; `win32-x64-msvc` → `win32-x64`
+
+`bindFfi` walks **all** existing candidates: a candidate that fails `dlopen` or
+a bind-time self-test (stale artifact, schema/wire drift) falls through to the
+next one, so a partial stage degrades to the still-correct addon instead of
+disabling the native path.
+
+### Source-build fallback (`postinstall`)
+
+`scripts/postinstall.ts` keeps the package usable without a matching prebuild
+(unsupported host, partial local publish, `npm install --build-from-source`).
+It is a fast no-op when an artifact for the host exists, and otherwise:
+
+| Condition | Behaviour |
+| --- | --- |
+| artifact for this host exists | skip (`prebuilt`) |
+| repo checkout (`.git` present) | skip — contributors run `bun run build:rust` |
+| `IGNEX_SKIP_BUILD` set / `CI` set | skip (`env` / `ci`) |
+| no `cargo`/`rustc` on PATH | warn + skip (`no-toolchain`) |
+| otherwise | `cargo build --release` → stage into **every** host tag dir |
+
+`IGNEX_REQUIRE_BUILD=1` turns every "warn + skip" into a hard install failure.
+`npm_config_build_from_source=true` forces a rebuild even when a prebuilt exists.
+
+> Bun does not run dependency lifecycle scripts by default — a Bun consumer that
+> wants the fallback adds `@ignex/nova` to `trustedDependencies`. npm consumers
+> run it normally. `IGNEX_FFI_PATH` always remains an escape hatch.
 
 ## The release pipeline
 
 ```
-bun run release            ──►  bump version
-                                  │
-                                  ├─► verify     (typecheck + lint + test)
-                                  ├─► pack:check (tarball contents gate)
-                                  ├─► bun publish
-                                  │      ├─ prepublishOnly  → generate + verify
-                                  │      └─ prepack         → prebuild (stage addon)
-                                  └─► git commit + tag vX.Y.Z (+ push)
+bun run release                 ──►  bump version (package.json + rust/Cargo.toml)
+                                       │
+                                       ├─► verify      (typecheck + lint + check:version + test)
+                                       ├─► pack:check  (tarball contents gate)
+                                       ├─► publish     — SKIPPED: strategy is `ci`
+                                       └─► git commit + tag vX.Y.Z  (+ push with --push)
+                                              │
+                                    push v* tag ──► CI publish workflow
+                                              │
+                        build 1 addon per target ──► artifacts/*.tgz inputs
+                                              │
+                          prepublish:verify (ALL targets present?) ──► npm publish
 ```
 
-### 1. Version bump
-`scripts/release.ts` supports `patch | minor | major` (default `patch`) or an
-explicit `--version`. Prereleases finalize on the next bump
-(`0.2.0-beta.1` → `0.2.0`).
+`.release.json` drives the shared `scripts/release.ts` (identical across the
+ignex product repos):
 
-### 2. Verify gate
-`bun run verify` = `typecheck` + `lint` + `test`. `prepublishOnly` first runs
-`generate` so the TypeBox → `.fbs` → flatc → glue artifacts are always fresh
-in the tarball (they're gitignored, so they must be regenerated at publish).
-
-### 3. Tarball check
-`bun run pack:check` runs `bun pm pack --dry-run --json` and asserts:
-
-- required files present: entrypoints, `src/`, `rust/Cargo.toml`, docs, README, LICENSE
-- nothing heavy/private leaks: `rust/target/`, `dist/`, `node_modules/`, `client-dist/`, tests, benches
-
-### 4. Native addon staging
-`prepack` runs `bun run prebuild` → `scripts/build-prebuild.ts`:
-
-```
-cargo build --release  →  rust/target/release/libignex_ffi.{so,dylib,dll}
-    cp →  prebuilds/<platform>-<arch>/libignex_ffi.{so,dylib,dll}
+```json
+{
+  "product": "nova",
+  "type": "single",
+  "verify": ["bun run verify"],
+  "checks": ["bun run pack:check"],
+  "versionFiles": [ "rust/Cargo.toml (regex)", "CHANGELOG.md (Unreleased → [x.y.z])" ],
+  "publish": { "strategy": "ci", "manager": "bun", "command": "…ALLOW_PARTIAL local fallback…" }
+}
 ```
 
-The loader (`src/native/loader.ts`) resolves the addon in this order:
+- **`strategy: "ci"`** — a local `bun run release` never publishes; pushing the
+  `v*` tag does. `bun run release:manual` (`--publish`) is the escape hatch for a
+  single-platform local publish: it runs the configured command, which sets
+  `IGNEX_PUBLISH_ALLOW_PARTIAL=1` so the completeness gate warns instead of
+  failing.
+- **Version sync** — the bump rewrites `package.json`, the `[package] version`
+  in `rust/Cargo.toml`, and finalizes `## [Unreleased]` in `CHANGELOG.md` into a
+  dated `## [<version>]` section. `bun run check:version` asserts all three
+  agree (plus the target contract) and runs inside `bun run verify`.
+- **Flags** — `--dry-run`, `--no-verify`, `--no-pack`, `--no-commit`, `--no-tag`,
+  `--no-bump`, `--no-publish`, `--publish`, `--push`, `--yes`, `--tag <dist-tag>`,
+  `--access`, `--otp`, `--allow-dirty`, `--no-preflight`.
 
-1. `IGNEX_FFI_PATH` env override
-2. in-repo dev build: `<repo>/rust/target/release/<lib>`
-3. packaged layout: `<pkg>/prebuilds/<platform>-<arch>/<lib>`
+## CI (`.github/workflows/`)
 
-So consumers on a platform with a shipped prebuild need **zero setup**; others
-rebuild from the shipped `rust/` source or set `IGNEX_FFI_PATH`.
+`ci.yml` — the standards flow:
 
-### 5. Publish
-`bun publish` (equivalent to `npm publish`) with `--tag <dist-tag>`
-(default `latest`) and `--access public`.
+| Job | What it gates |
+| --- | --- |
+| `rust` | `rust:fmt` (hand-written surface), `rust:clippy -- -D warnings`, `cargo test` |
+| `typescript` | ubuntu + macOS × Bun `1.4.2`/`latest`: pinned `flatc` → generate → build cdylib → bundle the demo → `bun run verify` → `bench:serialize` (perf gate) → `pack:check` |
+| `install` | packs the tarball, installs it into a throwaway consumer and imports it from `node_modules` (`bun run verify:install`) — proves the shipped layout resolves the exports map, the staged prebuild and the FFI self-tests |
 
-## Releasing
+Every job installs the **pinned `flatc`** (`bash scripts/install-flatc.sh`,
+version from `package.json#nova.flatc`) — the distro packages are older and
+generate Rust that does not compile against the `flatbuffers` 25.x crate. The
+demo-server e2e test serves `client-dist/main.js`, so the browser bundle is
+built before the suite runs (`pretest` does it for `bun run test`).
 
-### Manual (from a checkout)
+`publish.yml` — the multi-platform release, triggered by a `v*` tag or
+`workflow_dispatch` (optional `dist_tag` input + a `version` guard):
 
-```bash
-bun run release:dry                # plan only
-bun run release                    # patch bump → publish → commit + tag + push
-bun run release minor --tag beta   # minor + dist-tag `beta`
-bun run release --version 0.2.0 --no-verify --no-check
-bun run release --no-commit        # bump + publish, no git side effects
-bun run release --no-bump --no-verify --no-commit   # retry publish as-is
-```
+1. **generate**: installs the pinned `flatc`, regenerates the wire stack once and
+   uploads it (`rust/src/generated/` + `src/generated/`) — `flatc`'s Rust tables
+   are gitignored, so no target can compile from a bare checkout, and sharing
+   one output guarantees every platform compiles identical generated code.
+2. **build** (matrix = `nova.targets`, `needs: [generate]`): native runners for
+   darwin/windows and `x86_64-unknown-linux-gnu`; `gcc-aarch64-linux-gnu` cross
+   toolchain for `aarch64-unknown-linux-gnu`; `cargo zigbuild` for both musl
+   targets. Each job downloads the generated wire stack, then uploads
+   `prebuild-<tag>` containing `prebuilds/`.
+2. **publish**: downloads all artifacts into `./artifacts` (`merge-multiple`),
+   asserts the tag (or an explicit `version` input) matches the released
+   `package.json` version, generates an SBOM, regenerates the flatc output (with
+   the pinned compiler), runs `bun run verify` and then `bun run prepublish:verify`
+   (**hard-fails unless every declared target is staged**), publishes with npm
+   **OIDC trusted publishing** (`--provenance`, token fallback via
+   `secrets.NPM_TOKEN`, job environment `NPM_TOKEN`), and attests build
+   provenance for the artifacts.
 
-First release from a fresh checkout needs the generated artifacts + a built
-addon — `release` handles both via `prepublishOnly`/`prepack`, but you need a
-local Rust toolchain + `flatc` (see README "Prerequisites").
+The version always comes from the **release commit** — `bun run release` bumps
+`package.json` + `rust/Cargo.toml` + `CHANGELOG.md` together and tags that
+commit, so the workflow only has to verify (never rewrite) it. Pushing a tag
+whose version does not match `package.json` fails the job with instructions.
 
-### CI (`.github/workflows/publish.yml`)
+`needs:` cannot cross workflows, so the publish job re-runs the full `verify`
+gate itself — a tag can never ship past a red gate.
 
-Triggered by a `v*` tag push or `workflow_dispatch` (with optional `version`
-and `dist_tag` inputs). It builds prebuilds for **ubuntu-latest**
-(linux-x64), **macos-latest** (darwin-arm64) and **macos-13** (darwin-x64),
-merges them into `prebuilds/`, sets the version from the tag/input, runs the
-full gate, then publishes.
+### Pre-publish gate (`bun run prepublish:verify`)
 
-Set the `NPM_TOKEN` repo secret (an npm access token with publish rights) for
-the publish step. Provenance/attestations can be enabled by using
-`npm publish --provenance` and an `id-token: write` permission (the workflow
-already grants it).
+`scripts/prepublish.ts`:
+
+- merges every `prebuilds/` directory found under `artifacts/` into the package
+  (handles both `artifacts/prebuilds/...` and
+  `artifacts/prebuild-<tag>/prebuilds/...`)
+- prints a ✔/✖ row per declared target
+- fails with staging instructions unless every target has a **non-empty**
+  artifact (an empty file — a truncated upload — counts as missing)
+- `IGNEX_PUBLISH_ALLOW_PARTIAL=1` downgrades that to a loud warning
+
+It runs from `prepublishOnly` **and** explicitly in the CI publish job, so both
+`bun publish` and `npm publish` are covered.
 
 ## Pre-publish checklist
 
-- [ ] `bun run verify` passes locally
+- [ ] `flatc --version` matches `package.json#nova.flatc` (`bash scripts/install-flatc.sh`)
+- [ ] `bun run verify` passes locally (typecheck + lint + check:version + test)
+- [ ] `bun run rust:fmt && bun run rust:clippy && bun run test:rust` pass
 - [ ] `bun run pack:check` shows the expected files and no `rust/target/`
-- [ ] `prebuilds/` contains the addon(s) you intend to ship
-- [ ] npm auth works: `npm whoami`, and `NPM_TOKEN` is set for CI publishes
-- [ ] version is correct (`bun run release --version X.Y.Z`)
+- [ ] `bun run verify:install` passes (installed-tarball import + FFI self-test)
+- [ ] `CHANGELOG.md` has an `[Unreleased]` section describing the release
+- [ ] `bun run release:dry` shows the expected bump, tag and steps
+- [ ] for a tag release: the CI build job is green for all 7 targets
+- [ ] `NPM_TOKEN` is configured (or the npm trusted publisher is set up) for the
+      repo environment the publish job targets
 
 ## Tarball hygiene notes
 
 - `files` is an allowlist — only the listed top-level entries are packed.
 - Nested `rust/.npmignore` excludes `rust/target/` (platform-specific build
   output, GB-scale) and `Cargo.lock` (library crates don't commit it).
-- `prebuilds/` is empty (or absent) until `prepack`/CI stages addons, so a
-  source-only tarball is fine too — the loader just falls back to rebuild/`IGNEX_FFI_PATH`.
+- `prebuilds/` is gitignored; `prepack`/CI stage addons into it before packing.
+  A source-only tarball is still valid (loader → source rebuild/`IGNEX_FFI_PATH`,
+  and the `postinstall` fallback builds when a toolchain is present).
+- `artifacts/` (CI downloads) is gitignored and forbidden in the tarball by
+  `pack:check`.
 - The gitignored `src/generated/` artifacts ARE packed (they're under the
   included `src/`) — that's intentional: consumers must not need `flatc`.
+

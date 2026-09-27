@@ -32,6 +32,8 @@ const REQUIRED = [
   "src/core/server/index.ts",
   "src/core/client.ts",
   "src/native/loader.ts",
+  "src/native/targets.ts",
+  "src/native/ffi.ts",
   // codegen (consumed at runtime by `ignex-nova/generate`)
   "src/codegen/schema-model.ts",
   "src/codegen/typebox-to-fbs.ts",
@@ -42,7 +44,12 @@ const REQUIRED = [
   "src/codegen/fingerprint.ts",
   "rust/Cargo.toml",
   "rust/src/lib.rs",
+  // pinned toolchain — consumers rebuilding the addon from source get the same
+  // compiler the release artifacts were built with
+  "rust-toolchain.toml",
   "docs/wire-format.md",
+  "docs/publishing.md",
+  "CHANGELOG.md",
   "README.md",
   "LICENSE",
   "package.json",
@@ -57,6 +64,7 @@ const FORBIDDEN_PREFIXES = [
   "client/",
   "test/",
   "scripts/",
+  "artifacts/",
 ];
 
 const PACKED_LINE = /^packed\s+\S+\s+(.+)$/gm;
@@ -105,12 +113,17 @@ if (leaks.length > 0) {
 
 const prebuilds = paths.filter((p) => p.startsWith("prebuilds/"));
 if (prebuilds.length === 0) {
-  console.warn("⚠  no prebuilds/ staged — source-only tarball (rebuild or set IGNEX_FFI_PATH in consumers).");
+  console.warn(
+    "⚠  no prebuilds/ staged — source-only tarball (consumers rebuild from rust/ or set IGNEX_FFI_PATH).",
+  );
 } else {
   console.log("✔ staged prebuilds:");
   for (const p of prebuilds) {
     console.log(`  ${p}`);
   }
+  console.log(
+    "ℹ  multi-platform completeness is enforced by `bun run prepublish:verify` before publish.",
+  );
 }
 
 console.log(`\n✔ All ${REQUIRED.length} required files present, no forbidden paths.`);

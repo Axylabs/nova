@@ -1,0 +1,20 @@
+# Pin the Rust toolchain for reproducible release builds (local + CI).
+#
+# Cargo/rustup read this file and use exactly this version, so the cdylib built
+# on a maintainer's machine, in CI, and by a consumer's `postinstall` fallback
+# (`scripts/postinstall.ts`) all come from the same compiler. Bump deliberately,
+# only after the full gate is green:
+#
+#   bun run rust:fmt && bun run rust:clippy && bun run test:rust && bun run verify
+#
+# 1.98.1 (2026-09-01): the version CI and local development were verified
+# against (clippy `--all-targets -D warnings` clean, rustfmt clean on the
+# hand-written surface).
+#
+# Note: a distro-packaged toolchain (e.g. Arch's system rustc) is NOT
+# rustup-managed and ignores this file; it primarily pins the CI
+# `actions-rust-lang/setup-rust-toolchain` install and rustup-managed builds.
+[toolchain]
+channel = "1.98.1"
+components = ["rustfmt", "clippy"]
+profile = "minimal"

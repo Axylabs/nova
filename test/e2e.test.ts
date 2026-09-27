@@ -4,11 +4,23 @@
  */
 import { describe, expect, test } from "bun:test";
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { WIRE_HEADER_LEN, WIRE_VERSION } from "../src/generated/registry";
 
 describe("demo server (src/server.ts)", () => {
   test("serves page + bundle and streams typed events", async () => {
+    // The demo serves the browser bundle from `client-dist/`, which is gitignored
+    // — so a fresh checkout (CI) must build it first. Fail with the fix instead of
+    // a bare 404 on /dist/main.js.
+    const bundlePath = join(import.meta.dir, "..", "client-dist", "main.js");
+    if (!existsSync(bundlePath)) {
+      throw new Error(
+        `client-dist/main.js is missing — the demo server serves it from /dist/main.js.\n` +
+          `Build it first: bun run build:client   (\`bun run test\` does this via the pretest hook)`,
+      );
+    }
+
     const port = 3100 + Math.floor(Math.random() * 400);
     const child = spawn("bun", ["run", "src/server.ts"], {
       cwd: join(import.meta.dir, ".."),

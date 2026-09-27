@@ -23,8 +23,13 @@ use crate::transcode::generated::{self, WIRE_HEADER_LEN, WIRE_VERSION};
 pub const FB_PROBE_MAGIC: u32 = 0x4947_4e58;
 
 /// Capability probe used by the Bun bind-time self-test.
+///
+/// Deliberately a SAFE `extern "C"` fn: it takes no pointers and touches no
+/// memory, so there is no `# Safety` contract to document (every other export
+/// here is `unsafe` and documents one, because it dereferences caller
+/// pointers — see `fb_serialize`).
 #[no_mangle]
-pub unsafe extern "C" fn fb_probe() -> u32 {
+pub extern "C" fn fb_probe() -> u32 {
     FB_PROBE_MAGIC
 }
 
@@ -114,7 +119,12 @@ pub unsafe extern "C" fn ffi_probe_echo_cstr(data: *const c_char) -> usize {
 /// `json` must point to a NUL-terminated UTF-8 buffer valid for the call.
 /// `out` must point to `out_cap` writable bytes (or be null when `out_cap == 0`).
 #[no_mangle]
-pub unsafe extern "C" fn fb_serialize(event_id: u32, json: *const c_char, out: *mut u8, out_cap: usize) -> usize {
+pub unsafe extern "C" fn fb_serialize(
+    event_id: u32,
+    json: *const c_char,
+    out: *mut u8,
+    out_cap: usize,
+) -> usize {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         if json.is_null() || (out.is_null() && out_cap != 0) {
             return 0;
@@ -141,5 +151,3 @@ pub unsafe extern "C" fn fb_serialize(event_id: u32, json: *const c_char, out: *
     }))
     .unwrap_or(0)
 }
-
-

@@ -60,7 +60,14 @@ fb_schema_fingerprint: { args: [], returns: U64_FAST }
 
 ## Loader / addon resolution (`src/native/loader.ts`)
 
-Order: 1) `IGNEX_FFI_PATH` env override → 2) `<repo>/rust/target/release/`
-(dev build) → 3) `<pkg>/prebuilds/<platform>-<arch>/` (staged by
-`bun run prebuild`). Stale addons fail the bind-time fingerprint/wire checks
-loudly instead of emitting undecodable frames.
+Order: 1) `IGNEX_FFI_PATH` env override (exclusive — a typo fails loudly) →
+2) `<repo>/rust/target[/<triple>]/release/` (dev build) →
+3) `<pkg>/prebuilds/<tag>/` for every tag the host can load, best match first
+(`linux-x64-gnu` → `linux-x64-musl` → legacy `linux-x64` on glibc; musl-first on
+musl; `win32-x64-msvc` → `win32-x64`). The target/tag matrix is
+`src/native/targets.ts` (shared with the build/publish/postinstall scripts).
+
+`bindFfi` walks ALL existing candidates: a candidate whose `dlopen` or bind-time
+self-test fails (stale artifact, wire/schema drift) falls through to the next,
+so a partial stage degrades to the still-correct addon instead of silently
+disabling the native path.

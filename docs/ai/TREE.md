@@ -5,10 +5,10 @@
 > curated maps live in `docs/architecture.md` + `docs/wire-format.md`
 > (and `AGENTS.md` for agents).
 
-- package: `@ignex/nova` v0.1.3
+- package: `@ignex/nova` v0.1.7
 - engines: {"bun":">=1.4"}
-- rust crate: `ignex-nova-ffi` v0.1.0
-- scripts (20): `generate`, `build:rust`, `build:client`, `build:dist`, `build`, `prebuild`, `test`, `lint`, `typecheck`, `verify`, `pack:check`, `gen:ai-map`, …
+- rust crate: `ignex-nova-ffi` v0.1.7
+- scripts (29): `generate`, `build:rust`, `build:client`, `build:dist`, `build`, `prebuild`, `postinstall`, `test`, `test:rust`, `rust:fmt`, `rust:fmt:write`, `rust:clippy`, …
 
 ## src/
 
@@ -146,7 +146,8 @@ src/
 ├─ native/
 │  ├─ codec.ts
 │  ├─ ffi.ts
-│  └─ loader.ts
+│  ├─ loader.ts
+│  └─ targets.ts
 ├─ schema/
 │  └─ index.ts
 ├─ transport/
@@ -224,7 +225,9 @@ test/
 ├─ nats-bridge.test.ts
 ├─ nats-integration.test.ts
 ├─ performance.test.ts
+├─ postinstall.test.ts
 ├─ reconnect.test.ts
+├─ release-gate.test.ts
 ├─ resume.test.ts
 ├─ ring.test.ts
 ├─ rooms.test.ts
@@ -235,6 +238,7 @@ test/
 ├─ security.test.ts
 ├─ stability-resilience.test.ts
 ├─ targeting.test.ts
+├─ targets.test.ts
 ├─ trace.test.ts
 └─ wire.test.ts
 ```
@@ -257,9 +261,13 @@ bench/
 scripts/
 ├─ build-prebuild.ts
 ├─ check-pack.ts
+├─ check-version.ts
 ├─ gen-ai-map.ts
 ├─ generate.ts
-└─ release.ts
+├─ postinstall.ts
+├─ prepublish.ts
+├─ release.ts
+└─ verify-install.ts
 ```
 
 ## examples/

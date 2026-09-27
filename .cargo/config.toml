@@ -1,0 +1,22 @@
+# Cargo build configuration
+#
+# IMPORTANT: machine-local CPU tuning is intentionally NOT applied here.
+# Published artifacts must run on baseline x86-64 / aarch64 hosts, so every
+# target is built for its default CPU — a committed `-C target-cpu=x86-64-v3`
+# would silently make every release artifact require AVX2/BMI2/FMA and there is
+# no aarch64 equivalent (the same trap castrum documents in its repo).
+#
+# If you are benchmarking locally and want maximum SIMD throughput, override
+# per-invocation instead of editing this file:
+#
+#   CARGO_BUILD_RUSTFLAGS="-C target-cpu=native" bun run bench:serialize
+#
+# Cross-compiling (what `.github/workflows/publish.yml` does per target) needs
+# the target's linker, supplied by CI env vars, e.g. for linux/aarch64-gnu:
+#
+#   CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
+#   CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc
+#
+# musl targets are built with `cargo zigbuild` (`scripts/build-prebuild.ts
+# --zigbuild`), which resolves the C toolchain and linker itself — so nothing
+# machine-specific belongs in this file.

@@ -4,66 +4,158 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Nightly run against a quiet baseline: the perf gate (`bench:serialize`) is
+  # timing-sensitive, so a slow regression that a busy PR run can mask is still
+  # caught. Also enables manual dispatch from the Actions tab.
+  schedule:
+    - cron: '0 2 * * *'
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
 jobs:
-  test:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
+  # ── Rust correctness & lint ──────────────────────────────────────
+  # Gates the hand-written Rust surface (`rust/src/ffi.rs`, `rust/src/lib.rs`,
+  # the transcode emitters and the dev example). flatc's generated tables are
+  # excluded from rustfmt and carry their own lint allows (see
+  # `scripts/generate.ts`), so `-D warnings` never fails on machine output.
+  rust:
+    name: Rust (fmt, clippy, test)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-        with:
-          bun-version: latest
-
+      # Reads `rust-toolchain.toml` (channel + rustfmt/clippy components), so CI
+      # builds with exactly the pinned compiler. `cache: false` because the
+      # action's built-in rust-cache runs `cargo metadata` at the repo root,
+      # where there is no Cargo.toml (the crate lives in `rust/`) — the explicit
+      # `actions/cache` step below covers the registry + `rust/target` instead.
       - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
-
-      # Keep `flatc` and the `flatbuffers` crate/npm versions aligned (README).
-      - name: Install flatbuffers compiler
-        run: |
-          if [ "$RUNNER_OS" = "Linux" ]; then
-            sudo apt-get update && sudo apt-get install -y flatbuffers-compiler
-          else
-            brew install flatbuffers
-          fi
-
-      - name: Cache cargo
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          cache: false
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             rust/target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('rust/Cargo.toml') }}
+          key: ${{ runner.os }}-cargo-${{ hashFiles('rust/Cargo.toml', 'rust-toolchain.toml') }}
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      # The pinned compiler (package.json#nova.flatc), not the distro package:
+      # an older flatc generates Rust that does not compile against the 25.x
+      # `flatbuffers` crate.
+      - name: Install the pinned flatc
+        run: |
+          bash scripts/install-flatc.sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Generate (flatc output the crate compiles against)
+        run: bun run generate
+      - name: Format (hand-written surface)
+        run: bun run rust:fmt
+      - name: Clippy (-D warnings)
+        run: bun run rust:clippy
+      - name: Unit tests
+        run: bun run test:rust
 
+  # ── TypeScript correctness ───────────────────────────────────────
+  typescript:
+    name: TS (${{ matrix.os }}, bun ${{ matrix.bun }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        # `1.4.2` is the toolchain the release is verified against
+        # (`engines.bun >= 1.4`); `latest` tracks the release channel so a
+        # runtime regression is caught here.
+        bun: ['1.4.2', 'latest']
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: ${{ matrix.bun }}
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
+        with:
+          cache: false
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('rust/Cargo.toml', 'rust-toolchain.toml') }}
+      # Keep `flatc` pinned to `package.json#nova.flatc` — the generated Rust and
+      # TS must match the `flatbuffers` crate/npm range (see scripts/generate.ts).
+      - name: Install the pinned flatc
+        run: |
+          bash scripts/install-flatc.sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - name: Install dependencies
         run: bun install
-
       - name: Generate (TypeBox → .fbs → flatc → glue)
         run: bun run generate
-
       - name: Build Rust cdylib
         run: cargo build --release --manifest-path rust/Cargo.toml
-
-      - name: Typecheck
-        run: bunx tsc --noEmit -p tsconfig.json
-
-      - name: Lint (oxlint — FP discipline rules)
-        run: bunx oxlint
-
-      - name: Test
-        run: bun test
-
-      - name: Benchmark (serialize)
-        run: bun run bench:serialize
-
+      # The demo-server e2e test serves `client-dist/main.js` (gitignored), so the
+      # browser bundle must exist before the suite runs.
       - name: Bundle browser demo
         run: bun run build:client
+      # `verify` = typecheck + lint + version/target consistency + test suite.
+      - name: Verify (typecheck, lint, check:version, test)
+        run: bun run verify
+      - name: Benchmark (serialize — perf gate in bench/BASELINE.md)
+        run: bun run bench:serialize
+      # Tarball contents gate: required files present, nothing heavy leaking.
+      # Multi-platform completeness is enforced at publish time
+      # (`bun run prepublish:verify`), which needs every target staged.
+      - name: Tarball contents gate
+        run: bun run pack:check
+
+  # ── Installed-tarball end-to-end ─────────────────────────────────
+  # The suites import the package from the repo layout; this job packs it,
+  # installs the tarball into a throwaway consumer and imports it from
+  # node_modules — proving the SHIPPED layout resolves the exports map, the
+  # staged `prebuilds/<tag>/` addon and the FFI bind-time self-tests.
+  install:
+    name: Installed tarball (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    needs: [typescript]
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
+        with:
+          cache: false
+      # `src/generated/` is gitignored, so a fresh checkout must regenerate it
+      # before packing — the tarball ships those artifacts for consumers.
+      - name: Install the pinned flatc
+        run: |
+          bash scripts/install-flatc.sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Install dependencies
+        run: bun install
+      - name: Generate wire artifacts
+        run: bun run generate
+      - name: Pack + install + import the tarball
+        run: bun run verify:install

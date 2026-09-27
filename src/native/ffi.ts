@@ -27,7 +27,7 @@
 import { dlopen, type FFITypeOrString } from "bun:ffi";
 import type { Bindings, DirectTables } from "../bindings/types";
 import { defaultBindings } from "../bindings/default";
-import { getAddonPath } from "./loader";
+import { getAddonPath, getAddonPathCandidates } from "./loader";
 
 export const FB_PROBE_MAGIC = 0x4947_4e58; // "IGNX"
 
@@ -139,10 +139,41 @@ function adaptOut(sym: (...a: unknown[]) => number, mode: BufferAbiMode): (...a:
  * schema-fingerprint drift (stale / mismatched addon), or a broken JSON path.
  * Direct symbols that fail their per-symbol self-test are DISABLED (their
  * events fall back to the JSON path) rather than throwing.
+ *
+ * Resolution is multi-candidate (`src/native/loader.ts`): the dev build, then
+ * every `prebuilds/<tag>` the host can load, best match first. A candidate that
+ * fails to load or fails its self-test (e.g. a stale artifact built before a
+ * symbol was added) falls through to the next one, so a partial stage degrades
+ * to the still-correct addon instead of disabling the native path.
  */
 export function bindFfi(req: FfiRequirements): FfiDl {
-  const path = getAddonPath();
+  const failures: string[] = [];
+  for (const path of bindCandidates()) {
+    try {
+      return bindAt(path, req);
+    } catch (err) {
+      failures.push(`  - ${path}\n      ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+  throw new Error(`ignex: FFI bind failed for every candidate addon:\n${failures.join("\n")}`);
+}
 
+/**
+ * Candidate paths to bind, in order. An explicit `IGNEX_FFI_PATH` is honored
+ * EXCLUSIVELY (no silent fallback — a typo'd override must fail loudly rather
+ * than load a different addon); otherwise every existing host candidate is
+ * tried, and a host with no candidate at all throws the loader's full-list
+ * error before any binding is attempted.
+ */
+function bindCandidates(): string[] {
+  const override = process.env.IGNEX_FFI_PATH;
+  if (override) return [override];
+  const existing = getAddonPathCandidates();
+  return existing.length > 0 ? existing : [getAddonPath()];
+}
+
+/** Bind + self-test the cdylib at ONE path. */
+function bindAt(path: string, req: FfiRequirements): FfiDl {
   // Probe the atomic `buffer`/`buffer_length` pair once; fall back to explicit
   // `(ptr, usize)` output pairs when the Bun build rejects it.
   bufferAbiMode = probeBufferLength(path) ? "buffer-pair" : "ptr-len";

@@ -1,0 +1,17 @@
+# Normalize line endings to LF for all text files.
+* text=auto eol=lf
+
+# Native binaries are binary (never line-ending-converted). The staged addons
+# under prebuilds/ are gitignored, but a tarball/CI artifact round-trip must not
+# rewrite a cdylib.
+*.so binary
+*.dylib binary
+*.dll binary
+*.tgz binary
+
+# Images are binary.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary

@@ -161,20 +161,26 @@ Key techniques (Bun 1.4 standard practices, following the castrum FFI guide):
 ## Prerequisites
 
 - [Bun](https://bun.sh) ≥ 1.4
-- Rust toolchain (`cargo`)
-- `flatc` (FlatBuffers compiler): `brew install flatbuffers`,
-  `apt install flatbuffers-compiler`, or from <https://flatbuffers.dev>.
-  Keep `flatc` and the `flatbuffers` crate/npm versions aligned.
+- Rust toolchain (`cargo`). The channel is pinned in `rust-toolchain.toml`
+  (1.98.1) so local, CI and consumer rebuilds use the same compiler — rustup
+  picks it up automatically; a distro toolchain ignores it.
+- `flatc` (FlatBuffers compiler), **pinned** to `package.json#nova.flatc`:
+  `bash scripts/install-flatc.sh` (downloads the exact release → `~/.local/bin`).
+  The version must stay aligned with the `flatbuffers` crate/npm range — an
+  older compiler (e.g. the apt package) generates Rust that does not compile
+  against it, which `bun run generate` now rejects up front.
 
 ## Setup
 
 ```bash
-bun install            # deps: @sinclair/typebox, flatbuffers
+bash scripts/install-flatc.sh   # pinned flatc → ~/.local/bin (add it to PATH)
+bun install            # deps: @sinclair/typebox, flatbuffers (+ postinstall no-op in a checkout)
 bun run generate       # TypeBox → .fbs → flatc --ts/--rust → Rust glue + registry
-cargo build --release --manifest-path rust/Cargo.toml   # → <platform> libignex_ffi (.so/.dylib/.dll)
-bun run build:client   # bundle the browser demo → client-dist/
-bun test               # round-trip + FFI tests (needs generate + built addon)
-bun run lint           # oxlint — FP-discipline rules (no-var, no-param-reassign, …)
+bun run build:rust     # cargo build --release → rust/target/release/libignex_ffi (.so/.dylib/.dll)
+bun run prebuild       # stage the host addon → prebuilds/<platform>-<arch>[-<libc>]/
+bun run test           # builds the client bundle first (pretest), then the full suite
+bun run verify         # typecheck + lint + check:version + test
+bun run rust:fmt && bun run rust:clippy   # Rust formatting + lint (-D warnings)
 bun run serve          # demo: http://localhost:3000/  (ws: /ws)
 ```
 
@@ -219,9 +225,17 @@ Entrypoints:
 | `@ignex/nova/internal` | `public/internal.ts` — runtime helpers used by generated code |
 | `@ignex/nova/package.json` | `package.json` — version / metadata for tooling |
 
-**Native addon:** the tarball ships `rust/` source + `prebuilds/<platform>-<arch>/`
-for the platforms built at release (see CI). If your platform has a prebuild it
-just works. Otherwise either rebuild from the shipped source:
+**Native addon:** the tarball ships `rust/` source + a staged addon for every
+platform in the target matrix (`package.json#nova.targets`), laid out as
+`prebuilds/<platform>-<arch>[-<libc>]/` (`linux-x64-gnu`, `linux-arm64-musl`,
+`darwin-arm64`, `win32-x64-msvc`, …). If your platform has a prebuild it just
+works: the loader probes glibc → musl → the legacy tag, and an artifact that
+fails to load falls through to the next candidate.
+
+Otherwise either rebuild from the shipped source (the `postinstall` fallback
+does this automatically on npm installs where no prebuild matches — set
+`IGNEX_SKIP_BUILD=1` to opt out, or `IGNEX_REQUIRE_BUILD=1` to make a missing
+addon a hard install failure):
 
 ```bash
 cargo build --release --manifest-path node_modules/@ignex/nova/rust/Cargo.toml
@@ -243,7 +257,7 @@ staged, and published to npm.
 | `scripts/` | dev tooling: `generate.ts` orchestrator, prebuild/pack/release helpers (not published) |
 | `src/generated/` | flatc `--ts`/`--rust` output + `registry.ts` + `direct-ser.ts` + `ts-ser.ts` (built-in schema) |
 | `rust/` | cdylib: `ffi.rs` (C-ABI), `transcode/generated.rs` (glue) |
-| `src/native/` | `bun:ffi` binding, self-tests, per-platform addon loader |
+| `src/native/` | `bun:ffi` binding + self-tests, `targets.ts` (the native target matrix), `loader.ts` (multi-candidate addon resolution) |
 | `src/transport/` | `transport.ts` (`encodeToScratch`), `scratch.ts` (reusable zero-alloc buffer), `stats.ts` |
 | `src/core/` | functional modules: `server.ts`/`client.ts` composition roots, `state.ts`, `auth.ts`, `rooms.ts`, `groups.ts`, `replay.ts`, `backpressure.ts`, `outbound.ts`, `routing.ts`, `metrics.ts`, `int64-guard.ts`, client-* |
 | `src/bridge/` | optional NATS bridge: `nats.ts` (injectable transport, eager non-blocking connect), `subjects.ts` (subject naming) |
@@ -253,7 +267,7 @@ staged, and published to npm.
 | `client/` | browser demo (built to `client-dist/`) |
 | `bench/` | serialize latency + end-to-end throughput (+ `BASELINE.md` perf gate) |
 | `examples/` | `nats-consumer.ts` — independent NATS consumer for bridged frames |
-| `prebuilds/` | staged native addons per platform (`<platform>-<arch>/`), built by `bun run prebuild` / CI |
+| `prebuilds/` | staged native addons per target (`<platform>-<arch>[-<libc>]/`), built by `bun run prebuild` / CI |
 | `docs/` | `wire-format.md`, `architecture.md`, `publishing.md`, `events.md`, `generic-bindings.md` |
 
 ## Adding an event
@@ -381,19 +395,26 @@ opt-in — without `events`, there is zero overhead.
 
 ## Publishing to npm
 
-Publish directly from source — `bun publish` runs the release gate
-(`generate` → typecheck → lint → test) and `prepack` stages the native addon:
+The release is **CI-published** (like castrum): a local `bun run release` bumps
+the version (`package.json` + `rust/Cargo.toml` + `CHANGELOG.md`), runs the
+gate, then commits + tags; pushing the `v*` tag is what builds every platform
+and publishes the complete multi-platform tarball:
 
 ```bash
 bun run release:dry    # plan only — print what would happen
-bun run release        # patch bump → verify → publish → commit + tag (push only with `--push`)
+bun run release        # patch bump → verify → commit + tag (push only with `--push`)
 bun run release minor  # minor bump
 bun run release --version 0.2.0   # explicit version
+bun run release:manual # single-platform LOCAL publish (IGNEX_PUBLISH_ALLOW_PARTIAL=1)
 ```
 
-CI (`.github/workflows/publish.yml`) builds `prebuilds/` for
-ubuntu/macos/macos-13, merges them, verifies, and publishes on a `v*` tag or
-`workflow_dispatch` with `NPM_TOKEN`. Full details: [docs/publishing.md](docs/publishing.md).
+CI (`.github/workflows/publish.yml`) builds one addon per target in
+`package.json#nova.targets` (native runners for darwin/windows, cross-gcc for
+linux-arm64-gnu, `cargo zigbuild` for musl), then the publish job stages them
+from `./artifacts`, runs `bun run prepublish:verify` — which **fails if any
+declared target is missing** — and publishes with npm OIDC trusted publishing
+(+ token fallback) and build provenance. Full details:
+[docs/publishing.md](docs/publishing.md).
 
 ## Notes / limits
 

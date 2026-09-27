@@ -34,9 +34,11 @@
     "public",
     "src",
     "rust",
+    "rust-toolchain.toml",
     "prebuilds",
     "docs",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE"
   ],
   "main": "./index.ts",
@@ -57,6 +59,18 @@
   "publishConfig": {
     "access": "public"
   },
+  "nova": {
+    "flatc": "25.9.23",
+    "targets": [
+      "x86_64-unknown-linux-gnu",
+      "aarch64-unknown-linux-gnu",
+      "x86_64-unknown-linux-musl",
+      "aarch64-unknown-linux-musl",
+      "x86_64-apple-darwin",
+      "aarch64-apple-darwin",
+      "x86_64-pc-windows-msvc"
+    ]
+  },
   "scripts": {
     "generate": "bun scripts/generate.ts",
     "build:rust": "cargo build --release --manifest-path rust/Cargo.toml",
@@ -64,11 +78,20 @@
     "build:dist": "bun build ./index.ts ./public/server.ts ./public/client.ts ./public/nats.ts ./public/events.ts ./public/bindings.ts ./public/generate.ts ./public/internal.ts --outdir ./dist --target=bun --splitting && bunx tsc --emitDeclarationOnly -p tsconfig.dist.json",
     "build": "bun run generate && bun run build:rust && bun run build:client",
     "prebuild": "bun scripts/build-prebuild.ts",
+    "postinstall": "bun scripts/postinstall.ts",
+    "pretest": "bun run build:client",
     "test": "bun test",
+    "test:rust": "cargo test --manifest-path rust/Cargo.toml",
+    "rust:fmt": "rustfmt --edition 2021 --check --config skip_children=true rust/src/lib.rs rust/src/ffi.rs rust/examples/dump.rs",
+    "rust:fmt:write": "rustfmt --edition 2021 --config skip_children=true rust/src/lib.rs rust/src/ffi.rs rust/examples/dump.rs",
+    "rust:clippy": "cargo clippy --manifest-path rust/Cargo.toml --all-targets -- -D warnings",
     "lint": "bunx oxlint",
     "typecheck": "bunx tsc --noEmit -p tsconfig.json",
-    "verify": "bun run typecheck && bun run lint && bun test",
+    "check:version": "bun scripts/check-version.ts",
+    "verify": "bun run typecheck && bun run lint && bun run check:version && bun run test",
     "pack:check": "bun scripts/check-pack.ts",
+    "prepublish:verify": "bun scripts/prepublish.ts",
+    "verify:install": "bun scripts/verify-install.ts",
     "gen:ai-map": "bun scripts/gen-ai-map.ts",
     "serve": "bun run src/server.ts",
     "bench:serialize": "bun run bench/serialize.ts",
@@ -76,7 +99,8 @@
     "bench:throughput": "bun run bench/throughput.ts",
     "release": "bun scripts/release.ts",
     "release:dry": "bun scripts/release.ts --dry-run",
-    "prepublishOnly": "bun run generate && bun run verify",
+    "release:manual": "bun scripts/release.ts --publish",
+    "prepublishOnly": "bun run generate && bun run verify && bun run prepublish:verify",
     "prepack": "bun run prebuild"
   },
   "dependencies": {

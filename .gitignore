@@ -9,6 +9,9 @@ dist
 # staged native addons (built by `bun run prebuild` / prepack / CI)
 prebuilds/
 
+# CI-downloaded per-platform addons, staged by `bun run prepublish:verify`
+artifacts/
+
 # code coverage
 coverage
 *.lcov

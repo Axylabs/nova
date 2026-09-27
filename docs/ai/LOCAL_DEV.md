@@ -67,12 +67,14 @@ source, rebuild the addon **before** linking or using:
   Under Bun the addon is also called through `bun:ffi` from the same cdylib.
 - `@ignex/nova`: `bun run build:rust`
   (`cargo build --release --manifest-path rust/Cargo.toml`), or rely on
-  `prepack`/`prebuild` to stage `prebuilds/<platform>-<arch>/`.
+  `prepack`/`prebuild` to stage `prebuilds/<platform>-<arch>[-<libc>]/`.
 
-A stale `.node`/`.so` silently serves old behavior — rebuild, then re-test.
-`@ignex/nova` additionally fails its bind-time self-test on schema/wire-version
-mismatch (`IGNEX_FFI_PATH` can point at a specific build); `castrum` falls back
-to the napi transport when the `bun:ffi` self-test fails.
+A stale `.so`/`.dylib`/`.dll` silently serves old behavior — rebuild, then
+re-test. `@ignex/nova` additionally fails its bind-time self-test on
+schema/wire-version mismatch (`IGNEX_FFI_PATH` can point at a specific build,
+and the loader falls through to the next `prebuilds/<tag>` candidate when one
+fails to load); `castrum` falls back to the napi transport when the `bun:ffi`
+self-test fails.
 
 ## Never publish from a linked tree
 

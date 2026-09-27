@@ -161,7 +161,11 @@ frames) are encoded by `generated/ts-ser.ts` — flatc's object API (`XxxT` +
 - `src/schema/index.ts` — TypeBox source of truth.
 - `src/native/*` — the only place that talks to Rust: `dlopen` binding with a
   bind-time self-test (a failing direct symbol is disabled → JSON fallback),
-  `buffer`/`buffer_length` ABI probing, per-platform addon resolution.
+  `buffer`/`buffer_length` ABI probing, and multi-candidate addon resolution.
+  `targets.ts` is the native target matrix (Rust triple ↔
+  `prebuilds/<tag>/<lib>`, libc/arch preference) shared with the build,
+  pre-publish and postinstall scripts; `loader.ts` turns it into candidate
+  paths and `ffi.ts` binds the first candidate that passes its self-test.
 - `rust/` — a cdylib exporting `#[no_mangle] extern "C"` symbols, `panic_guard`-
   wrapped, `thread_local` reused `FlatBufferBuilder`.
 
@@ -192,8 +196,12 @@ frames) are encoded by `generated/ts-ser.ts` — flatc's object API (`XxxT` +
 ## Runtime & platform constraints
 
 - **Server is Bun-only** (`bun:ffi`, `Bun.serve`). Node is not supported.
-- The native addon is per-OS (`.so`/`.dylib`/`.dll`) — see
-  `src/native/loader.ts`. Build it with `cargo build --release`.
+- The native addon is per-OS **and per-libc** (`.so`/`.dylib`/`.dll`) — see
+  `src/native/{targets,loader}.ts`. Released tarballs carry a prebuild for
+  every target in `package.json#nova.targets`; build one locally with
+  `bun run build:rust` (dev) or `bun run prebuild` (staged).
+  `docs/publishing.md` documents the matrix, the pre-publish completeness gate
+  and the `postinstall` source-build fallback.
 - The **client** works in Bun AND browsers (bundle with
   `bun build --target=browser`).
 
