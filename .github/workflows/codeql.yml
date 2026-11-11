@@ -1,0 +1,48 @@
+# CodeQL static analysis (SAST) — JavaScript/TypeScript surface.
+#
+# Public repo, so Advanced Security is on by default; this scans the shipped
+# JS/TS surface on every push/PR and nightly, and uploads SARIF to the
+# Security tab. The Rust cdylib is covered by the main pipeline's clippy
+# (`-D warnings`), cargo-deny, and OSV scanning (CodeQL does not analyze Rust
+# via the javascript-typescript analyzer).
+
+name: CodeQL
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  schedule:
+    - cron: '17 3 * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: Analyze (JavaScript/TypeScript)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: github/codeql-action/init@fddeee1a7ece751b577e409a89057319e3172939 # v4
+        with:
+          languages: 'javascript-typescript'
+          # Scope analysis to the shipped surface (src/ + entries); exclude the
+          # benchmark/test scaffolding and generated artifacts.
+          config-file: ./.github/codeql-config.yml
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@fddeee1a7ece751b577e409a89057319e3172939 # v4
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@fddeee1a7ece751b577e409a89057319e3172939 # v4

@@ -90,20 +90,33 @@ bun run release [patch|minor|major|--version X.Y.Z]
 
 ## CI (`.github/workflows/`)
 
-- `ci.yml`: `rust` (fmt/clippy/test), `typescript` (ubuntu + macOS × Bun
-  matrix → pinned flatc → generate → build cdylib → bundle demo → verify →
-  bench → pack:check), `install` (`verify:install`).
-- `publish.yml`: **generate** (pinned flatc, uploads the wire stack) →
-  **build** matrix = one job per target (native runners for darwin/windows;
-  `gcc-aarch64-linux-gnu` for aarch64-gnu; `cargo zigbuild` for musl), each
-  downloading the generated code and uploading `prebuild-<tag>` → **publish**
-  downloads them into `artifacts/`, asserts the tag matches the released
-  version, runs `generate` + `verify` + `prepublish:verify`, then
-  `npm publish --provenance` with npm OIDC trusted publishing (token fallback
-  `secrets.NPM_TOKEN`, environment `NPM_TOKEN`) and attests build provenance.
-  `needs:` cannot cross workflows, so the publish job re-runs the gate itself.
-- **Toolchain pins are part of the contract**: `rust-toolchain.toml` (Rust) and
-  `package.json#nova.flatc` (flatc via `bash scripts/install-flatc.sh`). CI
-  never uses the distro `flatc` — an older one generates Rust that does not
-  compile against the `flatbuffers` 25.x crate (that failure mode broke CI).
+- `ci.yml`: `rust` (fmt/clippy/test + cargo-deny via `deny.toml`,
+  `manifest-path: rust/Cargo.toml`), `security` (OSV lockfile scan), 
+  `typescript` (ubuntu + macOS × Bun matrix → pinned flatc → generate → build
+  cdylib → bundle demo → verify → bench → pack:check), `install`
+  (`verify:install`), `build` (ALL 7 targets via the reusable
+  `build-addons.yml` — cross-platform breaks surface before a tag).
+- `codeql.yml`: CodeQL SAST over the shipped JS/TS surface.
+- `build-addons.yml` (reusable, `workflow_call`): **generate** (pinned flatc,
+  uploads the wire stack once — the gitignored flatc output means no target
+  can compile from a bare checkout, and sharing one output guarantees
+  byte-identical generated code) → **build** matrix = one job per target
+  (native runners for darwin/windows; `gcc-aarch64-linux-gnu` for
+  aarch64-gnu; `cargo zigbuild` for musl), each uploading `prebuild-<tag>`.
+  Called by `ci.yml` AND `publish.yml`, so the cross-build recipe exists once.
+- `publish.yml`: **verify** (tag ↔ package.json guard + full gate — fails
+  fast before cross builds) → **build** (`build-addons.yml`) → **publish**
+  downloads the artifacts into `artifacts/`, generates an SBOM (advisory),
+  then `npm publish` whose `prepublishOnly` re-runs `generate` + `verify` +
+  `prepublish:verify`. Publish auth: OIDC trusted publishing FIRST (attempt 1
+  scrubs `NODE_AUTH_TOKEN` and uses a clean npmrc — a reachable token makes
+  npm skip OIDC entirely), `secrets.NPM_TOKEN` fallback (attempt 2); npm
+  pinned `12.2.2`; NO GitHub `environment:` (the npm binding has none).
+  Attests SLSA3 provenance. → **github-release** attaches the prebuilds tree
+  as a tarball + `SHA256SUMS`.
+- **Toolchain pins are part of the contract**: `rust-toolchain.toml` (Rust),
+  `package.json#nova.flatc` (flatc via `bash scripts/install-flatc.sh`), and
+  the npm CLI version in `publish.yml`. CI never uses the distro `flatc` — an
+  older one generates Rust that does not compile against the `flatbuffers`
+  25.x crate (that failure mode broke CI).
 

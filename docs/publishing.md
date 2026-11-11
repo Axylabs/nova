@@ -59,10 +59,12 @@ The script stages `prebuilds/<tag>/<lib>` from
 
 `src/native/loader.ts` (matrix logic in `src/native/targets.ts`):
 
-1. `IGNEX_FFI_PATH` env override — honored **exclusively** (a typo fails loudly,
-   it never silently loads another addon)
-2. in-repo dev builds: `<pkg>/rust/target[/<triple>]/release/<lib>`
-3. packaged layout: `<pkg>/prebuilds/<tag>/<lib>` for every loadable tag, best
+1. schema-local `bindings.ffiPath` — honored **exclusively**, allowing different
+   generated schemas to use different addons in one process
+2. `IGNEX_FFI_PATH` env override — also exclusive (a typo fails loudly, it never
+   silently loads another addon)
+3. in-repo dev builds: `<pkg>/rust/target[/<triple>]/release/<lib>`
+4. packaged layout: `<pkg>/prebuilds/<tag>/<lib>` for every loadable tag, best
    match first — `linux-x64-gnu` → `linux-x64-musl` → legacy `linux-x64` on
    glibc; musl-first on musl; `win32-x64-msvc` → `win32-x64`
 
@@ -104,9 +106,13 @@ bun run release                 ──►  bump version (package.json + rust/Car
                                               │
                                     push v* tag ──► CI publish workflow
                                               │
-                        build 1 addon per target ──► artifacts/*.tgz inputs
+                     verify (tag ↔ package.json + full gate) ──► FAIL FAST
+                                              │
+                        build 1 addon per target ──► prebuild-<tag> artifacts
                                               │
                           prepublish:verify (ALL targets present?) ──► npm publish
+                                              │
+                            GitHub release (prebuilds tarball + SHA256SUMS)
 ```
 
 `.release.json` drives the shared `scripts/release.ts` (identical across the
@@ -142,18 +148,20 @@ ignex product repos):
 
 | Job | What it gates |
 | --- | --- |
-| `rust` | `rust:fmt` (hand-written surface), `rust:clippy -- -D warnings`, `cargo test` |
+| `rust` | `rust:fmt` (hand-written surface), `rust:clippy -- -D warnings`, `cargo test`, cargo-deny (advisories/yanked/licences, `manifest-path: rust/Cargo.toml` against `deny.toml`) |
+| `security` | OSV supply-chain scan of the lockfiles, SARIF to the Security tab |
 | `typescript` | ubuntu + macOS × Bun `1.4.2`/`latest`: pinned `flatc` → generate → build cdylib → bundle the demo → `bun run verify` → `bench:serialize` (perf gate) → `pack:check` |
 | `install` | packs the tarball, installs it into a throwaway consumer and imports it from `node_modules` (`bun run verify:install`) — proves the shipped layout resolves the exports map, the staged prebuild and the FFI self-tests |
+| `build` | **all 7 targets** via `build-addons.yml` (see below) — a cross-platform break surfaces on every push/PR, not at tag time |
 
-Every job installs the **pinned `flatc`** (`bash scripts/install-flatc.sh`,
-version from `package.json#nova.flatc`) — the distro packages are older and
-generate Rust that does not compile against the `flatbuffers` 25.x crate. The
-demo-server e2e test serves `client-dist/main.js`, so the browser bundle is
-built before the suite runs (`pretest` does it for `bun run test`).
+`codeql.yml` — CodeQL SAST over the shipped JS/TS surface (`src/`, `index.ts`,
+`public/`), nightly + push/PR, SARIF to the Security tab. The Rust cdylib is
+covered by clippy + cargo-deny + OSV instead.
 
-`publish.yml` — the multi-platform release, triggered by a `v*` tag or
-`workflow_dispatch` (optional `dist_tag` input + a `version` guard):
+### `build-addons.yml` — the shared multi-platform recipe
+
+A reusable workflow (`workflow_call`) called by BOTH `ci.yml` (validation) and
+`publish.yml` (release), so the cross-build recipe exists exactly once:
 
 1. **generate**: installs the pinned `flatc`, regenerates the wire stack once and
    uploads it (`rust/src/generated/` + `src/generated/`) — `flatc`'s Rust tables
@@ -164,14 +172,30 @@ built before the suite runs (`pretest` does it for `bun run test`).
    toolchain for `aarch64-unknown-linux-gnu`; `cargo zigbuild` for both musl
    targets. Each job downloads the generated wire stack, then uploads
    `prebuild-<tag>` containing `prebuilds/`.
-2. **publish**: downloads all artifacts into `./artifacts` (`merge-multiple`),
-   asserts the tag (or an explicit `version` input) matches the released
-   `package.json` version, generates an SBOM, regenerates the flatc output (with
-   the pinned compiler), runs `bun run verify` and then `bun run prepublish:verify`
-   (**hard-fails unless every declared target is staged**), publishes with npm
-   **OIDC trusted publishing** (`--provenance`, token fallback via
-   `secrets.NPM_TOKEN`, job environment `NPM_TOKEN`), and attests build
-   provenance for the artifacts.
+
+`publish.yml` — the release, triggered by a `v*` tag or `workflow_dispatch`
+(optional `dist_tag` input + a `version` guard):
+
+1. **verify**: asserts the tag (or an explicit `version` input) matches the
+   released `package.json` version, regenerates the flatc output (with the
+   pinned compiler), builds the cdylib, and runs the full gate (`bun run
+   verify` + `pack:check`) — BEFORE any cross build is paid for, so a red gate
+   fails fast.
+2. **build**: the shared `build-addons.yml` matrix.
+3. **publish**: downloads all artifacts into `./artifacts` (`merge-multiple`),
+   generates an SBOM (advisory — never a gate on a third-party asset fetch),
+   then publishes via `npm publish`, whose `prepublishOnly` re-runs
+   `generate + verify + prepublish:verify` (**hard-fails unless every declared
+   target is staged**). Publishing rides on npm **OIDC trusted publishing**
+   (`--provenance`): attempt 1 scrubs `NODE_AUTH_TOKEN` and uses a clean
+   npmrc so npm actually attempts the OIDC exchange; attempt 2 falls back to
+   the `secrets.NPM_TOKEN` secret. npm is pinned (`12.2.2`) — the CLI drift
+   has flipped publish auth before. No GitHub `environment:` is declared (the
+   npm trusted-publisher binding has none). Attests SLSA3 build provenance for
+   the staged artifacts.
+4. **github-release**: attaches the same prebuilt addons to a GitHub release —
+   one `ignex-nova-prebuilds-vX.Y.Z.tar.gz` (the full `prebuilds/` tree) plus a
+   `SHA256SUMS` over every artifact file.
 
 The version always comes from the **release commit** — `bun run release` bumps
 `package.json` + `rust/Cargo.toml` + `CHANGELOG.md` together and tags that
@@ -179,7 +203,9 @@ commit, so the workflow only has to verify (never rewrite) it. Pushing a tag
 whose version does not match `package.json` fails the job with instructions.
 
 `needs:` cannot cross workflows, so the publish job re-runs the full `verify`
-gate itself — a tag can never ship past a red gate.
+gate itself (via `prepublishOnly`) — a tag can never ship past a red gate; the
+separate `verify` job exists so the failure is cheap instead of after seven
+cross builds.
 
 ### Pre-publish gate (`bun run prepublish:verify`)
 
@@ -206,8 +232,9 @@ It runs from `prepublishOnly` **and** explicitly in the CI publish job, so both
 - [ ] `CHANGELOG.md` has an `[Unreleased]` section describing the release
 - [ ] `bun run release:dry` shows the expected bump, tag and steps
 - [ ] for a tag release: the CI build job is green for all 7 targets
-- [ ] `NPM_TOKEN` is configured (or the npm trusted publisher is set up) for the
-      repo environment the publish job targets
+- [ ] the npm trusted publisher is bound to this repo + `publish.yml` (or an
+      automation `NPM_TOKEN` secret exists as the fallback — a publish token
+      yields EOTP; it must be an automation token)
 
 ## Tarball hygiene notes
 

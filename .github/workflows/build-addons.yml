@@ -1,0 +1,154 @@
+name: Build native addons
+
+# Reusable multi-platform addon build. Called by:
+#   - ci.yml      (PR/push validation — a cross-platform break surfaces before
+#                  a tag, not at release time)
+#   - publish.yml (tag-triggered release; artifacts feed the npm tarball +
+#                  the GitHub release)
+#
+# `flatc`'s Rust tables are NOT committed (`rust/src/generated/` is
+# gitignored), so the crate cannot compile from a bare checkout. Rather than
+# installing the pinned compiler on all seven runners, generate ONCE here and
+# hand the output to the matrix — which also guarantees every platform
+# compiles byte-identical generated code (no wire drift between artifacts).
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ── Generated wire stack (shared by every build target) ──────────
+  generate:
+    name: Generate wire stack
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - name: Install the pinned flatc
+        run: |
+          bash scripts/install-flatc.sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Generate (TypeBox → .fbs → flatc → glue)
+        run: bun run generate
+      - name: Upload the generated wire stack
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: generated-wire
+          path: |
+            rust/src/generated/
+            src/generated/
+          if-no-files-found: error
+
+  # ── Multi-platform addon artifacts ───────────────────────────────
+  # One artifact per target in package.json "nova.targets" (the same matrix the
+  # loader and scripts/prepublish.ts use). Recipes, mirroring castrum's:
+  #   * native runners build darwin/windows + x86_64-linux-gnu
+  #   * linux/aarch64-gnu cross-compiles with the distro gcc-aarch64 toolchain
+  #   * musl targets use `cargo zigbuild` (no container, no musl sysroot needed)
+  # `scripts/build-prebuild.ts --target` stages `prebuilds/<tag>/<lib>` and
+  # fails loudly if the cdylib is missing, so a green job always has an artifact.
+  build:
+    name: Build ${{ matrix.tag }}
+    runs-on: ${{ matrix.os }}
+    needs: [generate]
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            tag: linux-x64-gnu
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            tag: linux-arm64-gnu
+            apt: gcc-aarch64-linux-gnu
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            tag: linux-x64-musl
+            zigbuild: "true"
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-latest
+            tag: linux-arm64-musl
+            zigbuild: "true"
+          - target: x86_64-apple-darwin
+            os: macos-13
+            tag: darwin-x64
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            tag: darwin-arm64
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            tag: win32-x64-msvc
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      # Reads `rust-toolchain.toml`; `cache: false` because the action's built-in
+      # rust-cache runs `cargo metadata` at the repo root (no Cargo.toml there —
+      # the crate is in rust/), which errors on every run.
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
+        with:
+          cache: false
+      - name: Add the target's std
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: rustup target add "$TARGET"
+      - name: Install cross C toolchain (linux/aarch64-gnu)
+        if: matrix.apt
+        env:
+          APT_PACKAGES: ${{ matrix.apt }}
+        run: sudo apt-get update && sudo apt-get install -y $APT_PACKAGES
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
+        if: matrix.zigbuild
+        with:
+          version: 0.15.2
+      - uses: taiki-e/install-action@fa23953489c080190314742a9b907f8e97c6767c # v2
+        if: matrix.zigbuild
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        with:
+          tool: cargo-zigbuild
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Download the generated wire stack
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: generated-wire
+          path: .
+      - name: Build + stage the target addon
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+          ZIGBUILD: ${{ matrix.zigbuild }}
+          # Only the aarch64-gnu entry uses these (the crate has no C sources,
+          # so the linker is the only thing that must be pointed at the cross gcc).
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+          CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
+        run: |
+          if [ "$ZIGBUILD" = "true" ]; then
+            bun scripts/build-prebuild.ts --target "$TARGET" --zigbuild
+          else
+            bun scripts/build-prebuild.ts --target "$TARGET"
+          fi
+      - name: Upload addon artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: prebuild-${{ matrix.tag }}
+          path: prebuilds/
+          if-no-files-found: error

@@ -1,5 +1,13 @@
 name: publish
 
+# Canonical release: verify the tag against the released version, build every
+# native target, publish the npm tarball with provenance, and attach the same
+# binaries + checksums to a GitHub release.
+#
+# Trigger with a version tag (`bun run release <bump> --push` produces the
+# release commit + tag) or manually from the Actions tab against a branch.
+# The tag MUST match package.json / rust/Cargo.toml / CHANGELOG.md (verified
+# below — a mismatch means the tag was pushed without the release flow).
 on:
   push:
     tags:
@@ -24,85 +32,22 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  RELEASE_TAG: ${{ github.ref_name }}
 
 jobs:
-  # ── Generated wire stack (shared by every build target) ──────────
-  # `flatc`'s Rust tables are NOT committed (`rust/src/generated/` is
-  # gitignored), so the crate cannot compile from a bare checkout. Rather than
-  # installing the pinned compiler on all seven runners, generate ONCE here and
-  # hand the output to the matrix — which also guarantees every platform
-  # compiles byte-identical generated code (no wire drift between artifacts).
-  generate:
-    name: Generate wire stack
+  # ── Quality gate (before spending on cross builds) ───────────────
+  # The gate runs HERE rather than via `needs:` because the standards jobs live
+  # in ci.yml (a `needs:` cannot cross workflows). Regenerates the flatc
+  # artifacts (gitignored, so they must be rebuilt), then runs the full gate:
+  # typecheck + lint + check:version + tests, and the tarball contents gate.
+  # The publish job's `prepublishOnly` re-runs `generate` + `verify` +
+  # `prepublish:verify` — a tag can never ship past a red gate.
+  verify:
+    name: Verify version + tests
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          persist-credentials: false
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-      - name: Install the pinned flatc
-        run: |
-          bash scripts/install-flatc.sh
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-      - name: Install dependencies
-        run: bun install --frozen-lockfile
-      - name: Generate (TypeBox → .fbs → flatc → glue)
-        run: bun run generate
-      - name: Upload the generated wire stack
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: generated-wire
-          path: |
-            rust/src/generated/
-            src/generated/
-          if-no-files-found: error
-
-  # ── Multi-platform addon artifacts ───────────────────────────────
-  # One artifact per target in package.json "nova.targets" (the same matrix the
-  # loader and scripts/prepublish.ts use). Recipes, mirroring castrum's:
-  #   * native runners build darwin/windows + x86_64-linux-gnu
-  #   * linux/aarch64-gnu cross-compiles with the distro gcc-aarch64 toolchain
-  #   * musl targets use `cargo zigbuild` (no container, no musl sysroot needed)
-  # `scripts/build-prebuild.ts --target` stages `prebuilds/<tag>/<lib>` and
-  # fails loudly if the cdylib is missing, so a green job always has an artifact.
-  build:
-    name: Build ${{ matrix.tag }}
-    runs-on: ${{ matrix.os }}
-    needs: [generate]
     timeout-minutes: 30
     permissions:
       contents: read
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - target: x86_64-unknown-linux-gnu
-            os: ubuntu-latest
-            tag: linux-x64-gnu
-          - target: aarch64-unknown-linux-gnu
-            os: ubuntu-latest
-            tag: linux-arm64-gnu
-            apt: gcc-aarch64-linux-gnu
-          - target: x86_64-unknown-linux-musl
-            os: ubuntu-latest
-            tag: linux-x64-musl
-            zigbuild: "true"
-          - target: aarch64-unknown-linux-musl
-            os: ubuntu-latest
-            tag: linux-arm64-musl
-            zigbuild: "true"
-          - target: x86_64-apple-darwin
-            os: macos-13
-            tag: darwin-x64
-          - target: aarch64-apple-darwin
-            os: macos-latest
-            tag: darwin-arm64
-          - target: x86_64-pc-windows-msvc
-            os: windows-latest
-            tag: win32-x64-msvc
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -114,115 +59,22 @@ jobs:
       - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
         with:
           cache: false
-      - name: Add the target's std
-        shell: bash
-        env:
-          TARGET: ${{ matrix.target }}
-        run: rustup target add "$TARGET"
-      - name: Install cross C toolchain (linux/aarch64-gnu)
-        if: matrix.apt
-        env:
-          APT_PACKAGES: ${{ matrix.apt }}
-        run: sudo apt-get update && sudo apt-get install -y $APT_PACKAGES
-      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
-        if: matrix.zigbuild
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
-          version: 0.15.2
-      - uses: taiki-e/install-action@fa23953489c080190314742a9b907f8e97c6767c # v2
-        if: matrix.zigbuild
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        with:
-          tool: cargo-zigbuild
-      - name: Install dependencies
-        run: bun install --frozen-lockfile
-      - name: Download the generated wire stack
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          name: generated-wire
-          path: .
-      - name: Build + stage the target addon
-        shell: bash
-        env:
-          TARGET: ${{ matrix.target }}
-          ZIGBUILD: ${{ matrix.zigbuild }}
-          # Only the aarch64-gnu entry uses these (the crate has no C sources,
-          # so the linker is the only thing that must be pointed at the cross gcc).
-          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
-          CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
-        run: |
-          if [ "$ZIGBUILD" = "true" ]; then
-            bun scripts/build-prebuild.ts --target "$TARGET" --zigbuild
-          else
-            bun scripts/build-prebuild.ts --target "$TARGET"
-          fi
-      - name: Upload addon artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: prebuild-${{ matrix.tag }}
-          path: prebuilds/
-          if-no-files-found: error
-
-  # ── Publish to npm ───────────────────────────────────────────────
-  # Downloads every platform artifact, re-runs the full gate (typecheck, lint,
-  # version/target consistency, tests), enforces the multi-platform completeness
-  # gate (`prepublish:verify` → every declared target staged), then publishes.
-  #
-  # The gate runs HERE rather than via `needs:` because the standards jobs live
-  # in ci.yml (a `needs:` cannot cross workflows); `prepublishOnly` therefore
-  # re-runs `verify` — a tag can never ship past a red gate.
-  publish:
-    name: Publish to npm
-    runs-on: ubuntu-latest
-    needs: [build]
-    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
-    timeout-minutes: 30
-    permissions:
-      contents: read
-      # npm Trusted Publishing (OIDC) + build provenance attestation.
-      id-token: write
-      attestations: write
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          persist-credentials: false
-      # No registry token is REQUIRED: npm prefers OIDC (trusted publishing)
-      # when it is configured and falls back to `secrets.NPM_TOKEN` otherwise.
-      # This needs npm >= 11.5.2, which is why the CLI is upgraded + asserted.
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: 24
-          registry-url: https://registry.npmjs.org
-      - name: Ensure npm supports OIDC trusted publishing (>= 11.5.2)
-        run: |
-          npm install -g npm@latest
-          node -e 'const v=require("node:child_process").execSync("npm --version").toString().trim().split(".").map(Number); if(v[0]<11||(v[0]===11&&v[1]<5)){console.error(`::error::npm ${v.join(".")} is too old for OIDC trusted publishing (need >= 11.5.2)`);process.exit(1)} console.log(`npm ${v.join(".")} supports trusted publishing`)'
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
-        with:
-          cache: false
-      # The publish job regenerates + re-verifies before packing, so it needs
-      # the pinned compiler too (scripts/generate.ts enforces the version).
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('rust/Cargo.toml', 'rust-toolchain.toml') }}
+      # The pinned compiler (package.json#nova.flatc), not the distro package:
+      # an older flatc generates Rust that does not compile against the 25.x
+      # `flatbuffers` crate.
       - name: Install the pinned flatc
         run: |
           bash scripts/install-flatc.sh
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - name: Install dependencies
-        run: bun install --frozen-lockfile
-      - name: Download all platform addons
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          path: artifacts
-          pattern: prebuild-*
-          merge-multiple: true
-      - name: Show the staged artifacts
-        run: ls -R artifacts
-      - name: Generate SBOM (dependency inventory)
-        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
-        with:
-          path: ./
-          format: spdx-json
-          artifact-name: nova-sbom.spdx.json
+        run: bun install
       # The version comes from the release COMMIT, not from this workflow:
       # `bun run release` bumps package.json + rust/Cargo.toml + CHANGELOG.md
       # together and tags that commit, and `bun run check:version` (inside
@@ -260,29 +112,200 @@ jobs:
             }
             console.log(`requested version ${requested} matches package.json`);
           '
-      # Regenerates the flatc artifacts (gitignored, so they must be rebuilt),
-      # then releases the full gate: typecheck + lint + check:version + tests,
-      # and finally the multi-platform completeness gate over ./artifacts.
-      - name: Verify + multi-platform completeness gate
+      - name: Generate (TypeBox → .fbs → flatc → glue)
+        run: bun run generate
+      - name: Build Rust cdylib
+        run: cargo build --release --manifest-path rust/Cargo.toml
+      # The demo-server e2e test serves `client-dist/main.js` (gitignored), so the
+      # browser bundle must exist before the suite runs (`pretest` does it for
+      # `bun run test` inside `verify` too — this is the explicit CI pass).
+      - name: Bundle browser demo
+        run: bun run build:client
+      # `verify` = typecheck + lint + check:version + test suite.
+      - name: Verify (typecheck, lint, check:version, test)
+        run: bun run verify
+      # Tarball contents gate: required files present, nothing heavy leaking.
+      # Multi-platform completeness is enforced at publish time
+      # (`bun run prepublish:verify`), which needs every target staged.
+      - name: Tarball contents gate
+        run: bun run pack:check
+
+  # ── Native addons (all platforms) ───────────────────────────────
+  build:
+    name: Build native addons
+    needs: [verify]
+    uses: ./.github/workflows/build-addons.yml
+
+  # ── Publish to npm ───────────────────────────────────────────────
+  # Downloads every platform artifact, enforces the multi-platform completeness
+  # gate (`prepublishOnly` → `prepublish:verify`: every declared target staged),
+  # then publishes.
+  #
+  # Publishing rides on npm OIDC trusted publishing (the trusted-publisher
+  # binding for this repo + publish.yml is configured on the npmjs package):
+  # npm exchanges the job's OIDC token for a short-lived publish credential —
+  # no long-lived secret to expire or leak. The NPM_TOKEN environment secret
+  # stays wired as a dormant FALLBACK (attempt 2 below). No GitHub
+  # `environment:` is declared — the trusted-publisher binding has none, and
+  # the workflow's OIDC claims must match it exactly.
+  publish:
+    name: Publish to npm
+    runs-on: ubuntu-latest
+    needs: [verify, build]
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      # npm Trusted Publishing exchanges this OIDC token for a short-lived
+      # publish credential; attest-build-provenance needs it too.
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      # No registry token is REQUIRED: npm prefers OIDC (trusted publishing)
+      # when it is configured and falls back to `secrets.NPM_TOKEN` otherwise.
+      # This needs npm >= 11.5.2, which is why the CLI is pinned + asserted.
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      # npm is PINNED, never `latest`: the 12.2.1 → 12.2.2 drift silently
+      # flipped publish auth to prefer OIDC and broke castrum's release. Bump
+      # this deliberately, with the trusted-publisher config in mind.
+      - name: Ensure npm supports OIDC trusted publishing (>= 11.5.2)
         run: |
-          bun run generate
-          bun run verify
-          bun run prepublish:verify
-      # Reports the OIDC environment (never the token) so a broken trusted-
-      # publisher exchange is diagnosable from the log.
+          npm install -g npm@12.2.2
+          node -e 'const v=require("node:child_process").execSync("npm --version").toString().trim().split(".").map(Number); const old=v[0]<11||(v[0]===11&&(v[1]<5||(v[1]===5&&v[2]<2))); if(old){console.error(`::error::npm ${v.join(".")} is too old for OIDC trusted publishing (need >= 11.5.2)`);process.exit(1)} console.log(`npm ${v.join(".")} supports trusted publishing`)'
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
+        with:
+          cache: false
+      # The publish job regenerates + re-verifies before packing (prepublishOnly),
+      # so it needs the pinned compiler too (scripts/generate.ts enforces it).
+      - name: Install the pinned flatc
+        run: |
+          bash scripts/install-flatc.sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Download all platform addons
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          path: artifacts
+          pattern: prebuild-*
+          merge-multiple: true
+      - name: Show the staged artifacts
+        run: ls -R artifacts
+      # NOTE: pinned to the v0 line on purpose; upstream re-tagged v0.24.3 to a
+      # commit the repo no longer serves, which breaks SHA-pinned refs.
+      #
+      # Advisory, never blocking: the action downloads the syft binary from
+      # github releases at run time, and during the 2026-11-08 CDN incident
+      # that download 504'd on 25+ consecutive runner attempts — a metadata
+      # inventory must not gate publishing on a third-party asset fetch.
+      - name: Generate SBOM (dependency inventory)
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        continue-on-error: true
+        with:
+          path: ./
+          format: spdx-json
+          artifact-name: nova-sbom.spdx.json
+      # Diagnostics for the OIDC path: if publishing fails, the log shows
+      # whether the runner exposed an id-token (required for the trusted-
+      # publishing exchange) and whether an .npmrc auth entry exists. The
+      # token is never printed.
       - name: Report the OIDC environment
         run: |
           echo "id-token request url   : ${ACTIONS_ID_TOKEN_REQUEST_URL:+present}"
           echo "id-token request token : ${ACTIONS_ID_TOKEN_REQUEST_TOKEN:+present}"
           echo "expected claim         : ${{ github.repository }} / .github/workflows/publish.yml @ ${{ github.ref }}"
-      - name: Publish to npm
+          if [ -f "$HOME/.npmrc" ]; then
+            echo "~/.npmrc present (token fallback wired):"
+            sed 's/_authToken=.*/_authToken=<redacted>/' "$HOME/.npmrc"
+          else
+            echo "no ~/.npmrc"
+          fi
+      # prepublishOnly regenerates the wire stack, re-runs the full gate
+      # (`bun run verify`) and stages ./artifacts into `prebuilds/`, failing
+      # unless every nova.targets artifact is present and non-empty.
+      #
+      # OIDC first, token second: npm only exchanges the job's OIDC token when
+      # NO other credential is reachable — a NODE_AUTH_TOKEN in the env (which
+      # setup-node interpolates into .npmrc) makes npm use the token and never
+      # try OIDC. Attempt 1 therefore runs against a clean userconfig with the
+      # token scrubbed out of the environment; attempt 2 restores the token
+      # fallback. History (castrum 2026-11-08/09): npm >= 12.2.2 prefers OIDC
+      # and E404s when the binding is missing; the inversion above is what
+      # produced EOTP failures on a dead publish token.
+      - name: Publish to npm (OIDC trusted publishing, token fallback)
+        run: |
+          set -uo pipefail
+          DIST_TAG="${DIST_TAG:-latest}"
+          # Attempt 1 — OIDC trusted publishing (clean credential environment).
+          printf 'registry=https://registry.npmjs.org/\n' > "$RUNNER_TEMP/oidc.npmrc"
+          if env -u NODE_AUTH_TOKEN \
+               npm publish --access public --tag "$DIST_TAG" --provenance \
+               --userconfig "$RUNNER_TEMP/oidc.npmrc"; then
+            exit 0
+          fi
+          echo "::warning::OIDC trusted publish failed — retrying with the NPM_TOKEN secret (needs an automation token to pass account 2FA; a publish token yields EOTP)"
+          # Attempt 2 — long-lived token fallback.
+          npm publish --access public --tag "$DIST_TAG" --provenance
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           DIST_TAG: ${{ github.event.inputs.dist_tag || 'latest' }}
-        # `--provenance` makes the OIDC attestation mandatory; without it a
-        # broken exchange is invisible (npm silently falls back to the token).
-        run: npm publish --access public --tag "$DIST_TAG" --provenance
+          # Fallback credential for attempt 2. npm >= 12 prefers it over OIDC
+          # whenever it is reachable, which is why attempt 1 scrubs it.
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      # SLSA3 provenance: records the repo/commit that produced this release so
+      # consumers can verify the artifact's supply chain.
       - name: Attest build provenance
         uses: actions/attest-build-provenance@8beda2b7ed98355c0e97c0a63bec38ae472e66c4 # v4
         with:
-          subject-path: '${{ github.workspace }}/artifacts/prebuilds/**/*'
+          subject-path: '${{ github.workspace }}/artifacts/**/*'
+
+  # ── GitHub release (binaries + checksums) ──────────────────────
+  # The same prebuilt addons that shipped in the npm tarball, attached to a
+  # GitHub release with SHA256SUMS — downloadable without an npm install.
+  github-release:
+    name: Create GitHub release
+    runs-on: ubuntu-latest
+    needs: [publish]
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Download all platform addons
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          path: artifacts
+          pattern: prebuild-*
+          merge-multiple: true
+      - name: Write checksums + bundle the prebuilds tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd artifacts
+          find . -type f | sort | xargs sha256sum > SHA256SUMS
+          cat SHA256SUMS
+          tar -czf "../ignex-nova-prebuilds-${RELEASE_TAG}.tar.gz" .
+      - name: Create the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="${RELEASE_TAG}"
+          bundle="ignex-nova-prebuilds-${tag}.tar.gz"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" "artifacts/SHA256SUMS" "$bundle" --clobber
+          else
+            gh release create "$tag" \
+              --verify-tag \
+              --title "$tag" \
+              --generate-notes \
+              "artifacts/SHA256SUMS" "$bundle"
+          fi

@@ -68,6 +68,37 @@ jobs:
         run: bun run rust:clippy
       - name: Unit tests
         run: bun run test:rust
+      # Dependency audit: advisories + yanked crates + licence allowlist. The
+      # action runs cargo inside its own container; `manifest-path` points at
+      # the crate (rust/Cargo.toml) because the repo root has no manifest.
+      # No committed Cargo.lock — cargo resolves one for the audit, so this
+      # checks the CURRENT dependency tree, not a pinned one.
+      - name: Dependency audit (cargo-deny)
+        uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2
+        with:
+          manifest-path: rust/Cargo.toml
+
+  # ── Software supply-chain scanning (OSV) ─────────────────────────
+  # Scans the JS lockfile against the OSV vulnerability database (complements
+  # cargo-deny advisories for the Rust tree). Reports findings as a SARIF
+  # upload for the GitHub Security tab.
+  # NOTE: v2 of `google/osv-scanner-action` restructured the repository — the
+  # root `action.yml` is a metadata-only stub with no `runs:` section, so
+  # referencing `google/osv-scanner-action@<sha>` as a STEP fails with
+  # "Top level 'runs:' section is required". Upstream's supported entry point is
+  # the reusable workflow below, called at JOB level (so no `runs-on`/`steps`).
+  security:
+    name: Supply-chain scan (OSV)
+    permissions:
+      # Required by the reusable workflow to upload its SARIF report.
+      actions: read
+      contents: read
+      security-events: write
+    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@a345acffa64b0eaede81a3d9aae6141214d9c8fc # v2.6.0
+    with:
+      scan-args: |-
+        -r
+        ./
 
   # ── TypeScript correctness ───────────────────────────────────────
   typescript:
@@ -160,3 +191,12 @@ jobs:
         run: bun run generate
       - name: Pack + install + import the tarball
         run: bun run verify:install
+
+  # ── Multi-platform addon artifacts ───────────────────────────────
+  # The target matrix + cross-build recipe live in build-addons.yml (shared
+  # with publish.yml). CI builds every target on each push/PR so a
+  # cross-platform break surfaces before a tag.
+  build:
+    name: Build native addons
+    needs: [rust]
+    uses: ./.github/workflows/build-addons.yml

@@ -50,3 +50,5 @@ client-dist/
 # Finder (MacOS) folder config
 .DS_Store
 .npmrc
+# Serena MCP project index
+.serena/

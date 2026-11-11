@@ -1,0 +1,20 @@
+# CodeQL configuration — scope analysis to the shipped JS/TS surface.
+#
+# `src/` is the runtime library, `index.ts` the package entry and `public/`
+# the subpath entrypoints consumers import; everything else is test,
+# benchmark, demo, or generated scaffolding that would only add noise.
+# (`src/generated/` is gitignored and absent from a CI checkout either way.)
+paths:
+  - src
+  - index.ts
+  - public
+paths-ignore:
+  - test
+  - bench
+  - client
+  - client-dist
+  - examples
+  - rust
+  - scripts
+  - docs
+  - node_modules
