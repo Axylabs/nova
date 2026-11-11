@@ -5,10 +5,10 @@
 > curated maps live in `docs/architecture.md` + `docs/wire-format.md`
 > (and `AGENTS.md` for agents).
 
-- package: `@ignex/nova` v0.1.7
+- package: `@ignex/nova` v0.1.8
 - engines: {"bun":">=1.4"}
-- rust crate: `ignex-nova-ffi` v0.1.7
-- scripts (29): `generate`, `build:rust`, `build:client`, `build:dist`, `build`, `prebuild`, `postinstall`, `test`, `test:rust`, `rust:fmt`, `rust:fmt:write`, `rust:clippy`, …
+- rust crate: `ignex-nova-ffi` v0.1.8
+- scripts (31): `generate`, `build:rust`, `build:client`, `build:dist`, `build`, `prebuild`, `postinstall`, `pretest`, `test`, `test:rust`, `rust:fmt`, `rust:fmt:write`, …
 
 ## src/
 
@@ -143,6 +143,13 @@ src/
 │  ├─ registry.ts
 │  ├─ ts-ser.ts
 │  └─ wire-registry.json
+├─ messaging/
+│  ├─ base64.ts
+│  ├─ codec.ts
+│  ├─ http.ts
+│  ├─ index.ts
+│  ├─ native.ts
+│  └─ sse.ts
 ├─ native/
 │  ├─ codec.ts
 │  ├─ ffi.ts
@@ -186,6 +193,8 @@ public/
 ├─ events.ts
 ├─ generate.ts
 ├─ internal.ts
+├─ messaging-server.ts
+├─ messaging.ts
 ├─ nats.ts
 └─ server.ts
 ```
@@ -221,6 +230,7 @@ test/
 ├─ int64.test.ts
 ├─ integrity.test.ts
 ├─ loader.test.ts
+├─ messaging.test.ts
 ├─ metrics.test.ts
 ├─ nats-bridge.test.ts
 ├─ nats-integration.test.ts
@@ -251,6 +261,7 @@ bench/
 ├─ dispatch.ts
 ├─ ffi-margin.ts
 ├─ measure.ts
+├─ messaging-http.ts
 ├─ serialize.ts
 └─ throughput.ts
 ```
@@ -264,6 +275,7 @@ scripts/
 ├─ check-version.ts
 ├─ gen-ai-map.ts
 ├─ generate.ts
+├─ install-flatc.sh
 ├─ postinstall.ts
 ├─ prepublish.ts
 ├─ release.ts
@@ -290,6 +302,7 @@ docs/
 ├─ architecture.md
 ├─ events.md
 ├─ generic-bindings.md
+├─ messaging.md
 ├─ publishing.md
 └─ wire-format.md
 ```

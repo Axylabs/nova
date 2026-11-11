@@ -80,3 +80,37 @@ monomorphic record shapes throughout.
 | dispatch sustained (new) | ~13M ops/s | < ~12M ops/s |
 | dispatch best-case (new) | ~63 ns/op | > ~70 ns/op |
 | trace.record (on) | ~43 ns/op | > ~55 ns/op |
+
+
+## Hardening audit comparison — 2026-11-11 (Bun 1.4.4)
+
+Same-machine before/after numbers for the closure-free dispatch change. The
+original gate numbers above remain unchanged; this section is a measurement
+record, not a lower-throughput baseline reset.
+
+```
+dispatch best case:      44.2 ns → 21.9 ns  (2.02× lower latency)
+dispatch sustained:   23.86M/s  → 35.60M/s (+49.2%)
+quote Rust direct:       200 ns  → 200 ns   (0 B/op before and after)
+portfolio Rust direct:   809 ns  → 810 ns
+publish throughput:    676892/s → 674801/s  (-0.3%, noise)
+client delivery:       20000/20000 before and after
+```
+
+
+## HTTP messaging optimization — 2026-11-11 (Bun 1.4.4)
+
+`bun run bench:messaging`: full client/server loopback echo, 9 interleaved
+fixed-op trials with median/min/CV. Initial figures are the pre-optimization
+two-run measurement of the same workload; final figures are the interleaved run.
+
+| payload | initial Nova | optimized Nova | Bun JSON | Nova latency reduction |
+| --- | ---: | ---: | ---: | ---: |
+| small quote echo | 71.5 µs | 50.5 µs | 41.0 µs | 29.4% |
+| 200-item vector echo | 264.4 µs | 176.6 µs | 127.4 µs | 33.2% |
+
+Changes: declared-length `arrayBuffer()` fast path (actual-size check retained),
+direct table/vector decoding without unpack intermediates, branch-free frame
+header reads, and plain-number int64 reads without temporary BigInt values.
+JSON remains faster end to end on this workload; no universal Nova-over-JSON
+performance claim is made.
