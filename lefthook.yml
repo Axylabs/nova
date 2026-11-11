@@ -9,7 +9,11 @@ pre-commit:
       # reports issues on new/changed lines. Install tools once: `qlty install`.
       run: qlty check --no-formatters
     oxlint:
-      glob: "*.{js,ts,jsx,tsx,json,jsonc}"
+      # JS/TS only: this oxlint does not lint JSON and exits 1 with "No files
+      # found to lint" on a JSON-only staged set — which is exactly every
+      # release commit (`package.json` + Cargo.toml + CHANGELOG). JSON stays
+      # covered by the whole-repo `bun run lint` in the pre-push hook.
+      glob: "*.{js,ts,jsx,tsx}"
       run: bunx oxlint {staged_files}
     typecheck:
       run: bun run typecheck
