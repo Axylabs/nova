@@ -107,3 +107,7 @@ export type {
   EventName,
   Events,
 } from "./src/schema";
+
+// Transport-neutral binary services and SSE (portable + Bun-native codec).
+export * from "./public/messaging";
+export { createNativeMessageCodec } from "./public/messaging-server";
