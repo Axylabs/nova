@@ -1,6 +1,6 @@
 {
   "name": "@ignex/nova",
-  "version": "0.1.8",
+  "version": "0.2.0",
   "type": "module",
   "description": "TypeBox-driven FlatBuffer messaging over WebSockets, binary HTTP, SSE, and NATS, with optional Rust-native encoding.",
   "license": "MIT",
