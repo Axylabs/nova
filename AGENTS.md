@@ -64,12 +64,14 @@ src/
   bindings/            Bindings contract + assemble + default (built-in registry)
   native/              the only Rust-touching code: ffi.ts (dlopen map + self-tests,
                        multi-candidate bind fallback), targets.ts (the native target
-                       matrix: triple ↔ prebuilds/<tag>/<lib>), loader.ts (IGNEX_FFI_PATH
-                       → rust/target/release → prebuilds/<tag>), codec.ts
+                       matrix: triple ↔ prebuilds/<tag>/<lib>), loader.ts (schema ffiPath
+                       → IGNEX_FFI_PATH → rust/target/release → prebuilds/<tag>), codec.ts
   core/                composition roots server/ + client.ts; action modules
                        (state, auth, rooms, ring, replay, groups, backpressure, outbound,
                        routing, metrics, int64-guard, client-state/-wire/-reconnect/-heartbeat/-rpc)
   transport/           encodeToScratch (direct/JSON/JS), scratch, stats, byte-buffer-pool
+  messaging/           transport-neutral codec, binary service client/handler,
+                       SSE frames + streams; native.ts = Bun Rust codec
   bridge/              optional NATS (nats/ = types, real-transport, inbound; subjects.ts)
   events/              opt-in events layer (hub/, registry, clients, cluster/,
                        queue, global, types/, delivery, schedule)
@@ -83,7 +85,7 @@ rust-toolchain.toml    pinned Rust channel (reproducible CI + consumer rebuilds)
 .cargo/config.toml     build policy: baseline-CPU artifacts only (no machine-local tuning)
 public/                npm entrypoint shims (server, client, nats, events, bindings, generate, internal)
 client/                browser demo (index.html, main.ts) → built to client-dist/
-test/                  25 bun:test files + helpers.ts
+test/                  39 bun:test files + helpers.ts
 bench/                 serialize, throughput, measure, ffi-margin + BASELINE.md (perf gate)
 scripts/               generate.ts, build-prebuild.ts (stage one target), prepublish.ts
                        (multi-platform completeness gate), postinstall.ts (source-build

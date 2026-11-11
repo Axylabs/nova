@@ -1,7 +1,9 @@
 # ignex-nova
 
-TypeBox-driven **FlatBuffer transport over Bun WebSockets** with a Rust FFI
-serializer — and a typed pub/sub API that hides all of it from developers.
+TypeBox-driven **FlatBuffer messaging over WebSockets, binary HTTP, SSE, and
+NATS** with a Rust FFI serializer — and typed APIs that hide all of it from
+developers. Nova is a transport-neutral communication contract, not only a WS
+server. See [service-to-service + SSE messaging](docs/messaging.md).
 
 ```ts
 // server (Bun)
@@ -141,8 +143,8 @@ generated pure-JS encoder (flatc object API over a pooled builder).
 
 Key techniques (Bun 1.4 standard practices, following the castrum FFI guide):
 
-- strings as pre-encoded `(buffer, usize)` via `Buffer.write` into a cached view
-  (zero JS-side text encoding, zero allocation); vectors as packed binary blobs
+- strings cross as `cstring` args (Bun transcodes without a JS-side
+  `TextEncoder`); vectors cross as packed binary blobs
 - `buffer` / `buffer_length` ABI pair for the output — the engine snapshots
   pointer + byteLength off the same view at call time (the "peak"/pointer +
   length pattern). `returns: 'u64_fast'` for byte counts.
@@ -222,6 +224,8 @@ Entrypoints:
 | `@ignex/nova/events` | `public/events.ts` — events layer + global emit |
 | `@ignex/nova/generate` | `public/generate.ts` — `generateBindings` (ANY-schema codegen) |
 | `@ignex/nova/bindings` | `public/bindings.ts` — `assembleBindings` / `defaultBindings` + types |
+| `@ignex/nova/messaging` | `public/messaging.ts` — binary services + SSE (browser + Bun) |
+| `@ignex/nova/messaging/server` | `public/messaging-server.ts` — messaging + Rust-native codec |
 | `@ignex/nova/internal` | `public/internal.ts` — runtime helpers used by generated code |
 | `@ignex/nova/package.json` | `package.json` — version / metadata for tooling |
 

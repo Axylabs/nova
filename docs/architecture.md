@@ -79,6 +79,16 @@ Browsers have no Rust FFI, so outgoing frames (app events **and** control
 frames) are encoded by `generated/ts-ser.ts` — flatc's object API (`XxxT` +
 `pack`) over a pooled `flatbuffers.Builder`. No JSON.
 
+## Transport-neutral messaging
+
+`src/messaging/` reuses the same generated frame contract outside WebSockets:
+`codec.ts` is the typed application-event boundary; `http.ts` provides bounded
+binary service handlers/clients over Request/Response; `sse.ts` provides
+base64-framed SSE responses and incremental readers with size limits and
+cancellation; `native.ts` supplies the Bun Rust codec. The portable entry is
+`@ignex/nova/messaging`; `/messaging/server` adds the native codec. See
+`docs/messaging.md` for the service and SSE protocols and examples.
+
 ## Runtime layout
 
 - `public/server.ts`, `public/client.ts`, `public/nats.ts` — thin re-export shims

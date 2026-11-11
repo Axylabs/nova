@@ -35,7 +35,7 @@ documents this; the FP lint rules in `.oxlintrc.json` enforce it.
 | `src/core/groups.ts` | Server-side targeting sets (no replay) |
 | `src/core/backpressure.ts` | Pure `decide` → send/enqueue/drop/close |
 | `src/core/outbound.ts` | The ONLY place touching `ws.send` + per-socket queue |
-| `src/core/routing.ts` | Inbound dispatch (header-first, control vs app) |
+| `src/core/routing.ts` | Inbound dispatch (header-first, control vs app), schema-checked and bounded RPC |
 | `src/core/metrics.ts`, `int64-guard.ts` | Counters; int64 encode guard (module-global by design) |
 | `src/core/client-wire.ts`, `client-reconnect.ts`, `client-heartbeat.ts` | Client side (pure backoff math, heartbeat) |
 | `src/transport/transport.ts` | `encodeToScratch` — direct (FFI) / JSON / pure-JS paths |
@@ -74,3 +74,10 @@ All names are typed via `EventNameOf<B>` from the bindings.
   security, security-hardening, performance, efficiency, bidirectional, e2e
   suites; NATS integration opt-in via `NATS_URL`).
 - `bun run verify` (typecheck + lint + test) before pushing.
+
+
+## Beyond WebSockets
+
+Transport-neutral binary service calls and Nova-over-SSE live in
+`src/messaging/` and are documented in `docs/messaging.md`. They reuse the same
+bindings/frame contract; do not fork a second serializer or payload model.

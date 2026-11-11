@@ -60,9 +60,9 @@ fb_schema_fingerprint: { args: [], returns: U64_FAST }
 
 ## Loader / addon resolution (`src/native/loader.ts`)
 
-Order: 1) `IGNEX_FFI_PATH` env override (exclusive — a typo fails loudly) →
-2) `<repo>/rust/target[/<triple>]/release/` (dev build) →
-3) `<pkg>/prebuilds/<tag>/` for every tag the host can load, best match first
+Order: 1) schema-local `bindings.ffiPath` (exclusive) → 2) `IGNEX_FFI_PATH` env
+override (exclusive — a typo fails loudly) → 3) `<repo>/rust/target[/<triple>]/release/`
+(dev build) → 4) `<pkg>/prebuilds/<tag>/` for every tag the host can load, best match first
 (`linux-x64-gnu` → `linux-x64-musl` → legacy `linux-x64` on glibc; musl-first on
 musl; `win32-x64-msvc` → `win32-x64`). The target/tag matrix is
 `src/native/targets.ts` (shared with the build/publish/postinstall scripts).

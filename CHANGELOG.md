@@ -10,6 +10,43 @@ dated `## [<version>]` heading (see `scripts/release.ts` + `.release.json`).
 
 ## [Unreleased]
 
+### Added
+- Transport-neutral messaging beyond WebSockets: `createServiceClient` /
+  `createServiceHandler` for bounded binary service-to-service request/response,
+  plus `createSseResponse` / `openNovaSse` / `readNovaSse` for typed Nova events
+  over SSE. The same generated contract now works over WS, binary HTTP, SSE,
+  NATS, and custom carriers without changing the frame format. New entry points:
+  `@ignex/nova/messaging` (portable) and `/messaging/server` (Rust-native).
+- Schema-local native addon selection via `makeBindings(schema, { ffiPath })` /
+  `assembleBindings(..., { ffiPath })`, so multiple custom schemas can use
+  their own Rust encoders in one process without a global environment override.
+- Immediate `subscribe()` / `joinGroup()` calls are retained until the socket
+  opens, and requested groups now restore after reconnect just like topics.
+- Per-connection RPC concurrency bounds (`maxRpcInFlight`, default 64) with
+  `metrics.rpcRejected` observability.
+
+### Fixed
+- RPC validates that the embedded request/response event matches the responder
+  schema instead of allowing cross-schema payload confusion. Base64 conversion
+  on the Bun server now uses Buffer rather than byte-at-a-time string building.
+- Connection limits include async upgrades in flight; empty tokens and throwing
+  token predicates fail closed instead of bypassing authentication.
+- A replaced socket's delayed close can no longer unregister its successor or
+  overwrite its resume history. Closing an older events hub no longer unbinds
+  the active global hub.
+
+### Performance
+- Removed per-handler closures from normal and catch-all event dispatch. On the
+  local Bun 1.4.4 benchmark, best-case dispatch improved from 44.2 ns to
+  21.9 ns and sustained throughput from 23.86M to 35.60M ops/s; Rust direct
+  encoding remained zero-allocation and publish throughput stayed stable.
+- Added a declared-length HTTP body fast path with actual-size verification and
+  generated direct table/vector decoders that remove unpack objects, per-element
+  vtable lookups, DataView headers, and plain-number int64 BigInt intermediates.
+  Interleaved loopback echo latency fell from 71.5 to 50.5 µs on small payloads
+  and from 264.4 to 176.6 µs on 200-item vectors; JSON remains faster on that
+  workload, so the measurements are not presented as a universal Nova win.
+
 ## [0.1.8] — 2026-09-27
 
 ### Fixed
