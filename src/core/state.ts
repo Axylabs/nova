@@ -68,6 +68,8 @@ export interface WsData {
   sendSeq: number;
   /** bounded sent-frame history for gap recovery (lazily created, resume only) */
   history?: import("./ring").RingBuffer<import("./resume").SentFrame>;
+  /** responders currently running for this connection */
+  rpcInFlight: number;
 }
 
 /** Slow-consumer policy (see `IgnBackpressureOptions`). */
@@ -140,6 +142,8 @@ export interface IgnServerOptions<B extends Bindings = DefaultBindings> {
   maxConnections?: number;
   /** maximum inbound frame size in bytes (close 1009 beyond) */
   maxMessageSize?: number;
+  /** maximum concurrent RPC responders per connection, default 64 */
+  maxRpcInFlight?: number;
   /**
    * Per-connection inbound rate limiting (token bucket over ALL frames — app
    * AND control). Default: off (zero hot-path overhead). Over-limit frames are
@@ -210,7 +214,10 @@ export interface ServerState {
   allowedOrigins?: string[];
   token?: string | ((token: string) => boolean);
   maxConnections?: number;
+  /** upgrades reserved while async auth is pending (counted by maxConnections) */
+  pendingUpgrades: number;
   maxMessageSize?: number;
+  maxRpcInFlight: number;
   rateLimit: ResolvedRateLimit | null;
   authorizeTopic?: (topic: string, ws: ServerWebSocket<WsData>) => boolean;
   authorizeGroup?: (group: string, ws: ServerWebSocket<WsData>) => boolean;
@@ -268,7 +275,9 @@ export function createServerState<B extends Bindings = DefaultBindings>(
     ...(options.allowedOrigins !== undefined ? { allowedOrigins: options.allowedOrigins } : {}),
     ...(options.token !== undefined ? { token: options.token } : {}),
     ...(options.maxConnections !== undefined ? { maxConnections: options.maxConnections } : {}),
+    pendingUpgrades: 0,
     ...(options.maxMessageSize !== undefined ? { maxMessageSize: options.maxMessageSize } : {}),
+    maxRpcInFlight: Math.max(1, options.maxRpcInFlight ?? 64),
     rateLimit: resolveRateLimit(options.rateLimit),
     ...(options.authorizeTopic !== undefined ? { authorizeTopic: options.authorizeTopic } : {}),
     ...(options.authorizeGroup !== undefined ? { authorizeGroup: options.authorizeGroup } : {}),

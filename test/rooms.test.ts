@@ -108,3 +108,35 @@ describe("rooms / topic subscriptions", () => {
     server.stop();
   });
 });
+
+
+describe("subscription API races", () => {
+  test("subscribe immediately after connect is applied on open", async () => {
+    const server = createServer({ port: 0 });
+    const client = createClient(`ws://localhost:${server.port}/ws`);
+    const got: string[] = [];
+    client.on("quote", (payload) => got.push(payload.symbol));
+    client.connect();
+    client.subscribe("immediate");
+    await waitFor(() => server.topics().includes("immediate"));
+    server.publishToTopic("immediate", "quote", quote("QUEUED"));
+    await waitFor(() => got.includes("QUEUED"));
+    client.close();
+    server.stop(true);
+  });
+
+  test("subscribe before connect also works, while queueSends=false stays strict", async () => {
+    const server = createServer({ port: 0 });
+    const client = createClient(`ws://localhost:${server.port}/ws`);
+    client.subscribe("before-connect");
+    client.connect();
+    await waitFor(() => server.topics().includes("before-connect"));
+    client.close();
+
+    const strict = createClient(`ws://localhost:${server.port}/ws`, { queueSends: false });
+    strict.connect();
+    expect(() => strict.subscribe("strict")).toThrow("client is not connected");
+    strict.close();
+    server.stop(true);
+  });
+});

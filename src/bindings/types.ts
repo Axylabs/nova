@@ -70,6 +70,8 @@ export interface Bindings {
    * self-tests; otherwise the pure-JS encoder is used (works without Rust).
    */
   readonly ffiMode: "required" | "optional";
+  /** Schema-specific addon path; takes precedence over IGNEX_FFI_PATH. */
+  readonly ffiPath?: string;
   /** app event schemas (name → TypeBox). */
   readonly events: Readonly<Record<string, TSchema>>;
   /** control event schemas (name → TypeBox). */

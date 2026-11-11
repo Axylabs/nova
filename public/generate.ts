@@ -442,7 +442,7 @@ function emitIndex(
   lines.push("export function makeBindings<");
   lines.push("  E extends Record<string, TSchema>,");
   lines.push("  C extends Record<string, TSchema>,");
-  lines.push(">(schema: { events: E; controlEvents?: C }) {");
+  lines.push(">(schema: { events: E; controlEvents?: C }, options: { ffiPath?: string } = {}) {");
   lines.push("  return assembleBindings(");
   lines.push("    {");
   lines.push("      wireVersion: reg.WIRE_VERSION,");
@@ -468,7 +468,7 @@ function emitIndex(
   lines.push("    },");
   lines.push("    schema,");
   lines.push(
-    `    { ffiMode: ${JSON.stringify(ffiMode)}, subjectPrefix: ${JSON.stringify(subjectPrefix)} },`,
+    `    { ffiMode: ${JSON.stringify(ffiMode)}, subjectPrefix: ${JSON.stringify(subjectPrefix)}, ...options },`,
   );
   lines.push("  );");
   lines.push("}");

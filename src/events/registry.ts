@@ -55,14 +55,41 @@ export interface HandlerRegistry {
   readonly errorCount: number;
 }
 
-function invoke(handler: AnyHandler, payload: unknown, ctx: DispatchContext, onError: (err: Error) => void): void {
+type ErrorReporter = (err: Error, name: string) => void;
+
+const asError = (err: unknown): Error => err instanceof Error ? err : new Error(String(err));
+
+function invoke(
+  handler: AnyHandler,
+  payload: unknown,
+  ctx: DispatchContext,
+  report: ErrorReporter,
+  name: string,
+): void {
   try {
     const r = handler(payload, ctx);
     if (r && typeof (r as Promise<void>).then === "function") {
-      void (r as Promise<void>).catch((err: unknown) => onError(err instanceof Error ? err : new Error(String(err))));
+      void (r as Promise<void>).catch((err: unknown) => report(asError(err), name));
     }
   } catch (err) {
-    onError(err instanceof Error ? err : new Error(String(err)));
+    report(asError(err), name);
+  }
+}
+
+function invokeAny(
+  handler: AnyHandler,
+  name: string,
+  payload: unknown,
+  ctx: DispatchContext,
+  report: ErrorReporter,
+): void {
+  try {
+    const r = (handler as (n: string, p: unknown, c: DispatchContext) => unknown)(name, payload, ctx);
+    if (r && typeof (r as Promise<void>).then === "function") {
+      void (r as Promise<void>).catch((err: unknown) => report(asError(err), name));
+    }
+  } catch (err) {
+    report(asError(err), name);
   }
 }
 
@@ -148,21 +175,13 @@ export function createHandlerRegistry(): HandlerRegistry {
       if (list !== undefined) {
         for (let i = 0; i < list.length; i++) {
           const h = list[i];
-          if (h !== undefined) invoke(h, payload, ctx, (err) => report(err, name));
+          if (h !== undefined) invoke(h, payload, ctx, report, name);
         }
       }
       const anys = anyHandlers;
       for (let i = 0; i < anys.length; i++) {
         const h = anys[i];
-        if (h === undefined) continue;
-        invoke(
-          (p) => {
-            (h as (n: string, p: unknown, c: DispatchContext) => unknown)(name, p, ctx);
-          },
-          payload,
-          ctx,
-          (err) => report(err, name),
-        );
+        if (h !== undefined) invokeAny(h, name, payload, ctx, report);
       }
     },
     wantsServerEvent(name) {
@@ -201,7 +220,7 @@ export function createHandlerRegistry(): HandlerRegistry {
       if (list === undefined) return;
       for (let i = 0; i < list.length; i++) {
         const h = list[i];
-        if (h !== undefined) invoke(h, payload, ctx, (err) => report(err, name));
+        if (h !== undefined) invoke(h, payload, ctx, report, name);
       }
     },
     onError(cb) {

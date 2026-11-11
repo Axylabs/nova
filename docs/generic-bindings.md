@@ -145,14 +145,27 @@ The whole public surface is generic:
 
 ## Rust FFI fast path (optional)
 
-By default generated bindings use `ffiMode: "optional"`: the server tries the
-Rust addon only when you point `IGNEX_FFI_PATH` at one — otherwise it silently
-uses the pure-JS encoder (correct everywhere, just not zero-allocation). To get
-the fast path:
+By default generated bindings use `ffiMode: "optional"`: without an addon they
+use the pure-JS encoder (correct everywhere, just not zero-allocation). Build
+the generated crate and pass its schema-local path when assembling the server
+bindings:
 
 ```bash
 cd ignex/generated/rust
-cargo build --release            # produces libignex_ffi.so/.dylib/.dll
+cargo build --release            # produces target/release/libignex_ffi.so/.dylib/.dll
+```
+
+```ts
+export const bindings = makeBindings(schema, {
+  ffiPath: new URL("./ignex/generated/rust/target/release/libignex_ffi.so", import.meta.url).pathname,
+});
+```
+
+`ffiPath` takes precedence over `IGNEX_FFI_PATH` and lets different schemas use
+different addons in one process. The environment variable remains useful for a
+single-schema deployment:
+
+```bash
 IGNEX_FFI_PATH=$(pwd)/target/release/libignex_ffi.so bun run your-server.ts
 ```
 

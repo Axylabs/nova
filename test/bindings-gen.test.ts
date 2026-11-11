@@ -45,10 +45,10 @@ const customSchema = {
   events: { chat: ChatMsg, telemetry: Telemetry, alert: Alert },
 };
 
-type MakeBindings = <E extends Record<string, TSchema>, C extends Record<string, TSchema>>(schema: {
-  events: E;
-  controlEvents?: C;
-}) => Omit<Bindings, "events" | "controlEvents"> & { events: E; controlEvents: C };
+type MakeBindings = <E extends Record<string, TSchema>, C extends Record<string, TSchema>>(
+  schema: { events: E; controlEvents?: C },
+  options?: { ffiPath?: string },
+) => Omit<Bindings, "events" | "controlEvents"> & { events: E; controlEvents: C };
 
 let genDir = "";
 let generated: GeneratedBindings | undefined;
@@ -86,6 +86,12 @@ describe("generateBindings (any schema)", () => {
     expect(files["rust/src/ffi.rs"]).toContain("fb_schema_fingerprint");
     // generated registry is self-contained (user mode: no schema import)
     expect(files["registry.ts"]).not.toContain('from "../schema"');
+  });
+
+  test("makeBindings forwards a schema-local ffiPath", () => {
+    const local = makeBindings!({ events: customSchema.events }, { ffiPath: "/tmp/custom-nova.so" });
+    expect(local.ffiPath).toBe("/tmp/custom-nova.so");
+    expect(local.ffiMode).toBe("optional");
   });
 
   test("dotted event names produce valid identifiers (regression)", () => {

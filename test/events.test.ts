@@ -402,3 +402,20 @@ describe("events layer — the events file (receiving events)", () => {
     server.stop();
   });
 });
+
+
+describe("global hub lifecycle", () => {
+  test("closing an older hub does not unbind the active replacement", async () => {
+    unbindEvents();
+    const older = createServer({ port: 0, events: {} });
+    const active = createServer({ port: 0, events: {} });
+    expect(getEventsHub()).toBe(active.events!);
+    older.stop(true);
+    await Bun.sleep(0);
+    expect(getEventsHub()).toBe(active.events!);
+    expect(isEventsBound()).toBe(true);
+    active.stop(true);
+    await Bun.sleep(0);
+    expect(isEventsBound()).toBe(false);
+  });
+});

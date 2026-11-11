@@ -178,8 +178,11 @@ closes and reconnects.
 - **Request/response**: `client.request(name, payload)` wraps a full wire frame
   (base64) in an `rpcCall` control frame with a correlation id; the server's
   registered responder (via `server.handle(name, fn)` or `hub.onRequest`)
-  returns the response payload encoded with the SAME event schema. Timeouts and
-  errors are correlated client-side.
+  returns the response payload encoded with the SAME event schema. The server
+  rejects an inner frame whose decoded event differs from `name`, the client
+  applies the same check to results, and each connection is limited to
+  `maxRpcInFlight` responders (default 64). Timeouts and errors are correlated
+  client-side.
 
 ## Security
 

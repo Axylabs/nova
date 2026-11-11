@@ -33,6 +33,8 @@ export interface AssembleOptions {
   ffiMode?: "required" | "optional";
   /** NATS subject prefix for bridges built from these bindings. */
   subjectPrefix?: string;
+  /** Schema-specific native addon; allows multiple schemas in one process. */
+  ffiPath?: string;
 }
 
 /**
@@ -56,6 +58,7 @@ export function assembleBindings<
     schemaFingerprint: parts.schemaFingerprint,
     ...(opts.subjectPrefix !== undefined ? { subjectPrefix: opts.subjectPrefix } : {}),
     ffiMode: opts.ffiMode ?? "optional",
+    ...(opts.ffiPath !== undefined ? { ffiPath: opts.ffiPath } : {}),
     events: schema.events,
     controlEvents,
     eventNameToId: parts.eventNameToId,

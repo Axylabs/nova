@@ -68,6 +68,8 @@ export interface ClientState {
   attempts: number;
   status: ClientStatus;
   subscribedTopics: Set<string>;
+  /** client-requested groups restored on every (re)connect */
+  requestedGroups: Set<string>;
   lastPong: number;
   /** id the server assigned to this connection (from `welcome`; "" until known) */
   clientId: string;
@@ -114,6 +116,7 @@ export function createClientState<B extends Bindings = DefaultBindings>(
     attempts: 0,
     status: "closed",
     subscribedTopics: new Set(),
+    requestedGroups: new Set(),
     lastPong: 0,
     clientId: "",
     groups: [],

@@ -519,7 +519,7 @@ export function createEventsHub<B extends Bindings = DefaultBindings>(
     async close() {
       if (closed) return;
       closed = true;
-      if (boundGlobal) unbindEvents();
+      if (boundGlobal) unbindEvents(api as never);
       scheduler.clear();
       clusterRpc?.close();
       // announce local leaves so remote presence converges before shutdown

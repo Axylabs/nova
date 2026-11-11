@@ -44,3 +44,31 @@ describe("bun:ffi binding", () => {
     expect(w).toBe(0);
   });
 });
+
+
+describe("schema-local native addon selection", () => {
+  test("ffiPath enables an optional binding without a process-global override", async () => {
+    const { defaultBindings } = await import("../src/bindings/default");
+    const { createTransport } = await import("../src/transport/transport");
+    const { getAddonPath } = await import("../src/native/loader");
+    const previous = process.env.IGNEX_FFI_PATH;
+    delete process.env.IGNEX_FFI_PATH;
+    try {
+      const bindings = { ...defaultBindings, ffiMode: "optional" as const, ffiPath: getAddonPath() };
+      const transport = createTransport(bindings);
+      const frame = transport.encodeEvent("quote", {
+        symbol: "LOCAL",
+        bid: 1,
+        ask: 2,
+        bidSize: 3,
+        askSize: 4,
+        ts: 5,
+      });
+      expect(defaultBindings.decodeFrame(frame)?.name).toBe("quote");
+      expect(transport.getEncodeStats().direct.quote).toBe(1);
+    } finally {
+      if (previous === undefined) delete process.env.IGNEX_FFI_PATH;
+      else process.env.IGNEX_FFI_PATH = previous;
+    }
+  });
+});

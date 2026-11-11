@@ -29,9 +29,9 @@ export function bindEvents(hub: EventsHub): void {
   bound = hub;
 }
 
-/** Unbind the singleton (called by the hub on close). */
-export function unbindEvents(): void {
-  bound = null;
+/** Unbind `hub`, or force-clear when called without one (tests/teardown). */
+export function unbindEvents(hub?: EventsHub): void {
+  if (hub === undefined || bound === hub) bound = null;
 }
 
 export function isEventsBound(): boolean {

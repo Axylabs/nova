@@ -271,3 +271,33 @@ describe("shutdown under load", () => {
   }, 10_000);
 });
 
+
+
+describe("stale socket lifecycle", () => {
+  test("a replaced socket's delayed close cannot unregister its replacement", async () => {
+    const { createServerState } = await import("../src/core/state");
+    const { onSocketOpen, onSocketClose } = await import("../src/core/server/socket-lifecycle");
+    const state = createServerState({ port: 0 });
+    const makeWs = () => ({
+      data: {
+        id: "same-client",
+        lastSeq: 0,
+        sendSeq: 1,
+        topics: new Set<string>(),
+        groups: new Set<string>(),
+        connectedAt: Date.now(),
+      },
+      send() {},
+      close() {},
+    });
+    const oldWs = makeWs();
+    const replacement = makeWs();
+    onSocketOpen(state, oldWs as never);
+    onSocketOpen(state, replacement as never);
+    onSocketClose(state, oldWs as never);
+    expect(state.clients.get("same-client") === (replacement as never)).toBe(true);
+    expect(state.sockets.has(replacement as never)).toBe(true);
+    onSocketClose(state, replacement as never);
+    expect(state.clients.has("same-client")).toBe(false);
+  });
+});

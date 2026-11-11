@@ -103,3 +103,73 @@ describe("request/response over the event wire", () => {
     server.stop(true);
   });
 });
+
+
+describe("request/response hardening", () => {
+  test("rejects an inner frame whose event differs from the responder name", async () => {
+    const { decodeFrame } = await import("../src/generated/registry");
+    const { encodeEvent } = await import("../src/transport/transport");
+    const { bytesToB64 } = await import("../src/core/client-rpc");
+    const { openWs } = await import("./helpers");
+    const server = createServer({ port: 0 });
+    let calls = 0;
+    server.handle("quote", (payload) => {
+      calls++;
+      return payload;
+    });
+    const ws = await openWs(`ws://localhost:${server.port}/ws`);
+    const result = new Promise<{ ok: boolean; err: string }>((resolve) => {
+      ws.onmessage = (ev) => {
+        const frame = decodeFrame(new Uint8Array(ev.data as ArrayBuffer));
+        if (frame?.name === "rpcResult") resolve(frame.payload as { ok: boolean; err: string });
+      };
+    });
+    const inner = encodeEvent("trade", {
+      symbol: "NOT-A-QUOTE",
+      price: 1,
+      volume: 1,
+      side: "buy",
+      ts: 1,
+    });
+    ws.send(encodeEvent("rpcCall", {
+      id: "mismatch",
+      name: "quote",
+      payloadB64: bytesToB64(inner),
+    }) as Uint8Array<ArrayBuffer>);
+    const reply = await result;
+    expect(reply.ok).toBe(false);
+    expect(reply.err).toContain("does not match");
+    expect(calls).toBe(0);
+    ws.close();
+    server.stop(true);
+  });
+
+  test("bounds concurrent responders per connection without leaking the slot", async () => {
+    const server = createServer({ port: 0, maxRpcInFlight: 1 });
+    let release = (): void => {};
+    let entered = 0;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    server.handle("quote", async (payload) => {
+      entered++;
+      await gate;
+      return payload;
+    });
+    const client = createClient(`ws://localhost:${server.port}/ws`);
+    client.connect();
+    await waitFor(() => server.clientCount === 1);
+    const first = client.request("quote", quote("FIRST"));
+    await waitFor(() => entered === 1);
+    await client.request("quote", quote("SECOND")).then(
+      () => expect.unreachable(),
+      (err: Error) => expect(err.message).toContain("too many concurrent RPC calls"),
+    );
+    release();
+    expect((await first).payload.symbol).toBe("FIRST");
+    expect((await client.request("quote", quote("THIRD"))).payload.symbol).toBe("THIRD");
+    expect(server.getMetrics().rpcRejected).toBe(1);
+    client.close();
+    server.stop(true);
+  });
+});

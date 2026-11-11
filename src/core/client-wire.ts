@@ -213,7 +213,11 @@ export function handleControl(state: ClientState, name: ControlEventName, payloa
       try {
         const bytes = Uint8Array.from(atob(p.payloadB64), (c) => c.charCodeAt(0));
         const frame = state.bindings.decodeFrame(bytes);
-        call.resolve(frame?.payload);
+        if (frame?.name !== call.name) {
+          call.reject(new Error(`ignex rpc "${call.name}" returned a mismatched event`));
+          break;
+        }
+        call.resolve(frame.payload);
       } catch (err) {
         call.reject(err instanceof Error ? err : new Error("ignex rpc: bad result"));
       }

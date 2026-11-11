@@ -146,9 +146,9 @@ function adaptOut(sym: (...a: unknown[]) => number, mode: BufferAbiMode): (...a:
  * symbol was added) falls through to the next one, so a partial stage degrades
  * to the still-correct addon instead of disabling the native path.
  */
-export function bindFfi(req: FfiRequirements): FfiDl {
+export function bindFfi(req: FfiRequirements, ffiPath?: string): FfiDl {
   const failures: string[] = [];
-  for (const path of bindCandidates()) {
+  for (const path of bindCandidates(ffiPath)) {
     try {
       return bindAt(path, req);
     } catch (err) {
@@ -159,14 +159,14 @@ export function bindFfi(req: FfiRequirements): FfiDl {
 }
 
 /**
- * Candidate paths to bind, in order. An explicit `IGNEX_FFI_PATH` is honored
- * EXCLUSIVELY (no silent fallback — a typo'd override must fail loudly rather
- * than load a different addon); otherwise every existing host candidate is
- * tried, and a host with no candidate at all throws the loader's full-list
- * error before any binding is attempted.
+ * Candidate paths to bind, in order. A schema-local path, then an explicit
+ * `IGNEX_FFI_PATH`, is honored EXCLUSIVELY (no silent fallback — a typo'd
+ * override must fail loudly rather than load a different addon); otherwise
+ * every existing host candidate is tried, and a host with no candidate at all
+ * throws the loader's full-list error before any binding is attempted.
  */
-function bindCandidates(): string[] {
-  const override = process.env.IGNEX_FFI_PATH;
+function bindCandidates(ffiPath?: string): string[] {
+  const override = ffiPath ?? process.env.IGNEX_FFI_PATH;
   if (override) return [override];
   const existing = getAddonPathCandidates();
   return existing.length > 0 ? existing : [getAddonPath()];
@@ -253,17 +253,18 @@ function bindAt(path: string, req: FfiRequirements): FfiDl {
 /**
  * Bind the cdylib for a `Bindings` object.
  *   - `ffiMode: "required"` — bind or THROW (the built-in registry's contract).
- *   - `ffiMode: "optional"` — used only when the user explicitly pointed at an
- *     addon (`IGNEX_FFI_PATH`); any bind / self-test failure (missing addon,
- *     schema mismatch, ...) returns `null`, and the transport falls back to the
- *     pure-JS encoder. Warns once per schema fingerprint.
+ *   - `ffiMode: "optional"` — used when the schema supplies `ffiPath` or the
+ *     process sets `IGNEX_FFI_PATH`; any bind / self-test failure (missing
+ *     addon, schema mismatch, ...) returns `null`, and the transport falls
+ *     back to the pure-JS encoder. Warns once per schema fingerprint.
  */
 const warnedOptional = new Set<number>();
 export function createFfi(bindings: Bindings): FfiDl | null {
-  if (bindings.ffiMode === "required") return bindFfi(bindings);
-  if (!process.env.IGNEX_FFI_PATH) return null; // no addon requested — pure JS
+  if (bindings.ffiMode === "required") return bindFfi(bindings, bindings.ffiPath);
+  const ffiPath = bindings.ffiPath ?? process.env.IGNEX_FFI_PATH;
+  if (!ffiPath) return null; // no addon requested — pure JS
   try {
-    return bindFfi(bindings);
+    return bindFfi(bindings, ffiPath);
   } catch (err) {
     if (!warnedOptional.has(bindings.schemaFingerprint)) {
       warnedOptional.add(bindings.schemaFingerprint);

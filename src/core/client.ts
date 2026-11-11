@@ -112,8 +112,10 @@ export function createClient<B extends Bindings = DefaultBindings>(
         caps: [],
         lastSeq: state.resume.enabled ? state.rxSeq : 0,
       });
-      // re-subscribe topics from before the disconnect (server cleared them)
+      // Restore desired membership from before the disconnect (the server
+      // cleared it). The same loops apply calls made before/between connects.
       for (const t of state.subscribedTopics) sendControl(state, "subscribe", { topic: t });
+      for (const g of state.requestedGroups) sendControl(state, "joinGroup", { group: g });
       // deliver app events that were sent before the socket was open (send()
       // queues by default — no need to wait for the connected status)
       flushPendingSends(state);
@@ -144,6 +146,13 @@ export function createClient<B extends Bindings = DefaultBindings>(
     state.ws = ws;
     return api;
   }
+
+  const controlIsOpen = (): boolean => state.ws?.readyState === WebSocket.OPEN;
+  const acceptDesiredControl = (): void => {
+    if (controlIsOpen()) return;
+    if (state.closed) throw new Error("ignex: client is closed");
+    if (state.opts.queueSends === false) throw new Error("ignex: client is not connected");
+  };
 
   const api: IgnClient<B> = {
     on(name, handler) {
@@ -233,21 +242,27 @@ export function createClient<B extends Bindings = DefaultBindings>(
       ) as Promise<RpcResult<EventsOf<B>[typeof name]>>;
     },
     subscribe(topic) {
+      acceptDesiredControl();
       state.subscribedTopics.add(topic);
-      sendControl(state, "subscribe", { topic });
+      if (controlIsOpen()) sendControl(state, "subscribe", { topic });
     },
     unsubscribe(topic) {
+      acceptDesiredControl();
       state.subscribedTopics.delete(topic);
-      sendControl(state, "unsubscribe", { topic });
+      if (controlIsOpen()) sendControl(state, "unsubscribe", { topic });
     },
     snapshotRequest(topic, fromSeq = 0) {
       sendControl(state, "snapshotRequest", { topic, fromSeq });
     },
     joinGroup(group) {
-      sendControl(state, "joinGroup", { group });
+      acceptDesiredControl();
+      state.requestedGroups.add(group);
+      if (controlIsOpen()) sendControl(state, "joinGroup", { group });
     },
     leaveGroup(group) {
-      sendControl(state, "leaveGroup", { group });
+      acceptDesiredControl();
+      state.requestedGroups.delete(group);
+      if (controlIsOpen()) sendControl(state, "leaveGroup", { group });
     },
     get clientId(): string {
       return state.clientId;

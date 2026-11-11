@@ -280,3 +280,50 @@ describe("topic-name injection surface", () => {
 function decodeWs(ev: MessageEvent): ReturnType<typeof decodeFrame> {
   return decodeFrame(new Uint8Array(ev.data as ArrayBuffer));
 }
+
+
+describe("upgrade gate hardening", () => {
+  test("an empty token fails closed and predicate failures deny cleanly", async () => {
+    const empty = createServer({ port: 0, token: "" });
+    expect(await tryConnect(`ws://localhost:${empty.port}/ws`)).toBe(false);
+    expect(await tryConnect(`ws://localhost:${empty.port}/ws`, {
+      headers: { authorization: "Bearer " },
+    })).toBe(false);
+    empty.stop(true);
+
+    const throwing = createServer({
+      port: 0,
+      token: () => {
+        throw new Error("validator unavailable");
+      },
+    });
+    expect(await tryConnect(`ws://localhost:${throwing.port}/ws`)).toBe(false);
+    expect((await fetch(`http://localhost:${throwing.port}/clients`)).status).toBe(401);
+    throwing.stop(true);
+  });
+
+  test("maxConnections includes upgrades still awaiting asynchronous auth", async () => {
+    let release = (): void => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const server = createServer({
+      port: 0,
+      maxConnections: 1,
+      authenticate: async () => {
+        await gate;
+        return true;
+      },
+    });
+    const url = `ws://localhost:${server.port}/ws`;
+    const first = tryConnect(url);
+    await Bun.sleep(20);
+    const second = tryConnect(url);
+    await Bun.sleep(20); // let the second upgrade observe the reserved slot
+    release();
+    expect(await first).toBe(true);
+    expect(await second).toBe(false);
+    expect(server.clientCount).toBe(1);
+    server.stop(true);
+  });
+});

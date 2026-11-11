@@ -8,10 +8,9 @@ import { plainTsType, toSnake } from "./schema-model";
  *   - server: `eventNameToId` for `encodeEvent`
  *   - client: `eventIdToDecoder` + `decodeFrame` for the standard `on(...)` API
  *
- * The `*ToPlain` adaptors convert flatc `unpack()` output (snake_case fields,
- * numeric enums, bigint int64) into the exact `Events[K]` plain-object shape.
- * Event-root adaptors are typed against `Events[K]` (compile-time check); nested
- * adaptors infer their object shape.
+ * The `*ToPlain` adaptors read flatc table accessors directly into the exact
+ * `Events[K]` plain-object shape, avoiding intermediate unpack objects. Event-
+ * root adaptors are typed against `Events[K]`; nested adaptors infer their shape.
  *
  * Event ids are STABLE FNV-1a 32-bit hashes of the event name (not insertion
  * order), so schema reordering / field additions no longer renumber the wire
@@ -22,8 +21,6 @@ import { plainTsType, toSnake } from "./schema-model";
  * `Events` / `ControlEvents` payload types instead of importing the app schema.
  */
 export function emitRegistry(m: Model, fingerprint: number, ctx: EmitContext = {}): string {
-  const enumValues = new Map(m.enums.map((e) => [e.name, e.values]));
-
   // tables reachable from an event root
   const needed = new Set<string>();
   const visit = (name: string) => {
@@ -104,7 +101,7 @@ export function emitRegistry(m: Model, fingerprint: number, ctx: EmitContext = {
   for (const ev of m.events) {
     const plain = toSnake(ev.tableName);
     lines.push(
-      `  ${eventId(ev.name)}: (bb) => ${plain}ToPlain(${ev.tableName}.getSizePrefixedRootAs${ev.tableName}(bb).unpack()),`,
+      `  ${eventId(ev.name)}: (bb) => ${plain}ToPlain(${ev.tableName}.getSizePrefixedRootAs${ev.tableName}(bb)),`,
     );
   }
   lines.push("};");
@@ -120,7 +117,7 @@ export function emitRegistry(m: Model, fingerprint: number, ctx: EmitContext = {
   lines.push("  if (bytes.byteLength < WIRE_HEADER_LEN) return null;");
   lines.push("  if (bytes[0] !== WIRE_VERSION) return null; // version mismatch — reject");
   lines.push(
-    "  const id = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(1, true);",
+    "  const id = (bytes[1] | (bytes[2] << 8) | (bytes[3] << 16) | (bytes[4] << 24)) >>> 0;",
   );
   lines.push("  const name = idToAnyEventName[id];");
   lines.push("  if (name === undefined) return null;");
@@ -150,16 +147,42 @@ export function emitRegistry(m: Model, fingerprint: number, ctx: EmitContext = {
   lines.push('  return v == null ? dflt : typeof v === "string" ? v : textDecoder.decode(v);');
   lines.push("}");
   lines.push("");
+  lines.push("function readInt64Number(bb: flatbuffers.ByteBuffer, pos: number): number {");
+  lines.push("  return bb.readInt32(pos + 4) * 4294967296 + bb.readUint32(pos);");
+  lines.push("}");
+  lines.push("function int64Field(o: any, vtable: number): number {");
+  lines.push("  const offset = o.bb!.__offset(o.bb_pos, vtable);");
+  lines.push("  return offset ? readInt64Number(o.bb!, o.bb_pos + offset) : 0;");
+  lines.push("}");
+  lines.push("");
+
+  for (const e of m.enums) {
+    lines.push(`const ${e.name}Values = [${e.values.map((v) => JSON.stringify(v)).join(", ")}] as const;`);
+  }
+  if (m.enums.length > 0) lines.push("");
 
   for (const t of neededTables) {
     const event = m.events.find((e) => e.tableName === t.name);
     const annot = event
       ? `: ${event.control ? "ControlEvents" : "Events"}[${JSON.stringify(event.name)}]`
       : "";
-    lines.push(`function ${toSnake(t.name)}ToPlain(o: ${t.name}T)${annot} {`);
+    lines.push(`function ${toSnake(t.name)}ToPlain(o: ${t.name})${annot} {`);
+    for (const [fieldIndex, f] of t.fields.entries()) {
+      if (f.kind === "vector-double" || f.kind === "vector-bool" || f.kind === "vector-enum" || f.kind === "vector-int64") {
+        const vtable = 4 + fieldIndex * 2;
+        lines.push(`  const ${f.jsonName}Offset = o.bb!.__offset(o.bb_pos, ${vtable});`);
+        lines.push(`  const ${f.jsonName} = new Array(${f.jsonName}Offset ? o.bb!.__vector_len(o.bb_pos + ${f.jsonName}Offset) : 0);`);
+        lines.push(`  if (${f.jsonName}Offset) for (let i = 0; i < ${f.jsonName}.length; i++) ${f.jsonName}[i] = ${scalarVectorExpr(f)};`);
+      } else if (f.kind.startsWith("vector-")) {
+        lines.push(`  const ${f.jsonName} = new Array(o.${f.jsonName}Length());`);
+        lines.push(`  for (let i = 0; i < ${f.jsonName}.length; i++) ${f.jsonName}[i] = ${vectorExpr(f)};`);
+      } else if (!f.required) {
+        lines.push(`  const ${f.jsonName}Value = o.${f.jsonName}();`);
+      }
+    }
     lines.push("  return {");
-    for (const f of t.fields) {
-      lines.push(`    ${f.jsonName}: ${plainExpr(f, enumValues)},`);
+    for (const [fieldIndex, f] of t.fields.entries()) {
+      lines.push(`    ${f.jsonName}: ${f.kind.startsWith("vector-") ? f.jsonName : directExpr(f, 4 + fieldIndex * 2)},`);
     }
     lines.push("  };");
     lines.push("}");
@@ -202,45 +225,59 @@ function emitLocalTypes(
   return lines;
 }
 
-function plainExpr(f: FieldDef, enumValues: Map<string, string[]>): string {
-  // flatc TS accessors/.T fields are camelCase (it converts the snake_case .fbs
-  // names) — so read via jsonName, which equals the TypeBox/Events key.
-  const o = `o.${f.jsonName}`;
+function directExpr(f: FieldDef, vtableOffset: number): string {
+  const value = f.required ? `o.${f.jsonName}()` : `${f.jsonName}Value`;
   switch (f.kind) {
     case "string":
-      return f.required ? `str(${o})` : `${o} == null ? undefined : str(${o})`;
+      return f.required ? `str(${value})` : `${value} == null ? undefined : str(${value})`;
     case "double":
     case "bool":
-      return o;
+      return value;
     case "int64":
-      // bigint-annotated fields stay bigint (exact); plain int64 → number
-      return f.bigint ? o : `Number(${o})`;
+      return f.bigint ? value : `int64Field(o, ${vtableOffset})`;
     case "enum":
-      return `${enumTuple(f.enumName!, enumValues)}[${o}] ?? ${JSON.stringify(enumValues.get(f.enumName!)?.[0] ?? "")}`;
+      return `${f.enumName}Values[${value}] ?? ${f.enumName}Values[0]`;
     case "table":
-      // Required nested tables are always written by the encoder, so the
-      // decoder may assert non-null (keeps the Events[K] type honest);
-      // optional tables keep the defensive undefined fallback.
       return f.required
-        ? `${toSnake(f.tableName!)}ToPlain(${o}!)`
-        : `${o} === null || ${o} === undefined ? undefined : ${toSnake(f.tableName!)}ToPlain(${o})`;
-    case "vector-string":
-      return `${o}.map((s) => str(s))`;
-    case "vector-double":
-    case "vector-bool":
-      return `${o}.map((n) => n)`;
-    case "vector-int64":
-      return `${o}.map((n) => Number(n))`;
-    case "vector-enum":
-      return `${o}.map((n) => ${enumTuple(f.enumName!, enumValues)}[n] ?? ${JSON.stringify(enumValues.get(f.enumName!)?.[0] ?? "")})`;
-    case "vector-table":
-      return `${o}.map((c) => ${toSnake(f.tableName!)}ToPlain(c))`;
+        ? `${toSnake(f.tableName!)}ToPlain(${value}!)`
+        : `${value} == null ? undefined : ${toSnake(f.tableName!)}ToPlain(${value}!)`;
     default:
-      return o;
+      return value;
   }
 }
 
-function enumTuple(enumName: string, enumValues: Map<string, string[]>): string {
-  const values = enumValues.get(enumName) ?? [];
-  return `([${values.map((v) => JSON.stringify(v)).join(", ")}] as const)`;
+function scalarVectorExpr(f: FieldDef): string {
+  const base = `o.bb!.__vector(o.bb_pos + ${f.jsonName}Offset)`;
+  switch (f.kind) {
+    case "vector-double":
+      return `o.bb!.readFloat64(${base} + i * 8)`;
+    case "vector-bool":
+      return `o.bb!.readInt8(${base} + i) !== 0`;
+    case "vector-enum":
+      return `${f.enumName}Values[o.bb!.readInt32(${base} + i * 4)] ?? ${f.enumName}Values[0]`;
+    case "vector-int64":
+      return `readInt64Number(o.bb!, ${base} + i * 8)`;
+    default:
+      return "undefined";
+  }
+}
+
+function vectorExpr(f: FieldDef): string {
+  const value = `o.${f.jsonName}(i)`;
+  switch (f.kind) {
+    case "vector-string":
+      return `str(${value})`;
+    case "vector-double":
+      return `${f.jsonName}Source[i]`;
+    case "vector-bool":
+      return `${f.jsonName}Source[i] !== 0`;
+    case "vector-int64":
+      return `Number(${value})`;
+    case "vector-enum":
+      return `${f.enumName}Values[${f.jsonName}Source[i]] ?? ${f.enumName}Values[0]`;
+    case "vector-table":
+      return `${toSnake(f.tableName!)}ToPlain(${value}!)`;
+    default:
+      return value;
+  }
 }

@@ -14,10 +14,15 @@ import type { ServerState, WsData } from "../state";
 
 /** A socket opened: register, adopt resume history, seed groups, greet. */
 export function onSocketOpen(state: ServerState, ws: ServerWebSocket<WsData>): void {
+  if (state.maxConnections !== undefined && state.pendingUpgrades > 0) state.pendingUpgrades--;
   state.sockets.add(ws);
-  // belt-and-suspenders: an auth race could double-register an id — kick the stale session
+  // Detach the replaced record before attaching its successor. Its delayed
+  // close callback must not detach or unregister the new socket later.
   const existing = state.clients.get(ws.data.id);
-  if (existing && existing !== ws) existing.close(1000, "replaced by newer session");
+  if (existing && existing !== ws) {
+    state.onDisconnect?.(existing);
+    existing.close(1000, "replaced by newer session");
+  }
   state.clients.set(ws.data.id, ws);
   // resume: adopt a parked history for this client id (continues the
   // previous session's delivery-seq stream) BEFORE anything is sent
@@ -42,16 +47,17 @@ function greetClient(state: ServerState, ws: ServerWebSocket<WsData>): void {
 
 /** A socket closed: detach everywhere and park the resume history. */
 export function onSocketClose(state: ServerState, ws: ServerWebSocket<WsData>): void {
-  // events-layer detach FIRST (client record still carries groups/topics)
-  state.onDisconnect?.(ws);
+  const current = state.clients.get(ws.data.id) === ws;
+  // Replacement sockets detach the old events record during open. A delayed
+  // close from that old socket must not detach/unregister the replacement.
+  if (current) state.onDisconnect?.(ws);
   state.sockets.delete(ws);
-  state.clients.delete(ws.data.id);
+  if (current) state.clients.delete(ws.data.id);
   for (const g of ws.data.groups) removeFromGroup(state, ws, g);
   ws.data.groups.clear();
   for (const t of ws.data.topics) leaveRoom(state, ws, t);
   ws.data.topics.clear();
   delete ws.data.queue;
-  // resume: park the sent-history so a reconnect with the same id can
-  // pick up where this session left off (no-op when resume is off)
-  burySession(state, ws);
+  // Never park an obsolete session over history adopted by its replacement.
+  if (!state.clients.has(ws.data.id)) burySession(state, ws);
 }

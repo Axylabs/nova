@@ -186,11 +186,21 @@ export function handleControl(
         reply(false, "", `no handler for "${p.name}"`);
         return;
       }
+      if (ws.data.rpcInFlight >= state.maxRpcInFlight) {
+        state.metrics.rpcRejected++;
+        reply(false, "", `too many concurrent RPC calls (limit ${state.maxRpcInFlight})`);
+        return;
+      }
       const inner = decodeB64Frame(state, p.payloadB64);
       if (!inner) {
         reply(false, "", "undecodable request payload");
         return;
       }
+      if (inner.name !== p.name) {
+        reply(false, "", `RPC payload event "${inner.name}" does not match "${p.name}"`);
+        return;
+      }
+      ws.data.rpcInFlight++;
       void (async () => {
         try {
           const out = await responder(inner.payload, ws);
@@ -199,6 +209,8 @@ export function handleControl(
           reply(true, b64(frame));
         } catch (err) {
           reply(false, "", err instanceof Error ? err.message : String(err));
+        } finally {
+          ws.data.rpcInFlight--;
         }
       })();
       break;
@@ -209,18 +221,15 @@ export function handleControl(
 /** Decode a base64 wire frame (rpcCall payload) into { name, payload }. */
 function decodeB64Frame(
   state: ServerState,
-  b64: string,
+  value: string,
 ): { name: string; payload: unknown } | null {
   try {
-    const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+    const bytes = Buffer.from(value, "base64");
     return state.bindings.decodeFrame(bytes) as { name: string; payload: unknown } | null;
   } catch {
     return null;
   }
 }
 
-const b64 = (bytes: Uint8Array): string => {
-  let s = "";
-  for (let i = 0; i < bytes.byteLength; i++) s += String.fromCharCode(bytes[i]!);
-  return btoa(s);
-};
+const b64 = (bytes: Uint8Array): string =>
+  Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString("base64");

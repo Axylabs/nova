@@ -37,6 +37,8 @@ export interface MetricsSnapshot {
   rateLimited: number;
   /** topic/group joins rejected by `authorizeTopic` / `authorizeGroup` */
   rejectedJoins: number;
+  /** RPC calls rejected by the per-connection in-flight bound */
+  rpcRejected: number;
   bytesSent: number;
   /** frames stamped with a per-connection delivery seq (envelope v2, resume on) */
   stampedSeq: number;
@@ -73,6 +75,8 @@ export interface Metrics {
   protocolErrors: number;
   rateLimited: number;
   rejectedJoins: number;
+  /** RPC calls rejected by the per-connection in-flight bound */
+  rpcRejected: number;
   bytesSent: number;
   stampedSeq: number;
   resumesServed: number;
@@ -93,6 +97,7 @@ export function createMetrics(startedAt = Date.now()): Metrics {
     protocolErrors: 0,
     rateLimited: 0,
     rejectedJoins: 0,
+    rpcRejected: 0,
     bytesSent: 0,
     stampedSeq: 0,
     resumesServed: 0,
@@ -110,6 +115,7 @@ export function createMetrics(startedAt = Date.now()): Metrics {
         protocolErrors: m.protocolErrors,
         rateLimited: m.rateLimited,
         rejectedJoins: m.rejectedJoins,
+        rpcRejected: m.rpcRejected,
         bytesSent: m.bytesSent,
         stampedSeq: m.stampedSeq,
         resumesServed: m.resumesServed,

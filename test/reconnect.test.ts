@@ -142,3 +142,24 @@ describe("heartbeat", () => {
     server.stop();
   });
 });
+
+
+describe("group membership recovery", () => {
+  test("client-requested groups are restored after reconnect", async () => {
+    const port = 6100 + Math.floor(Math.random() * 400);
+    let server = createServer({ port });
+    const client = createClient(`ws://localhost:${port}/ws`, {
+      reconnect: { initialDelay: 50, maxDelay: 250, jitter: false },
+    });
+    client.connect();
+    client.joinGroup("traders");
+    await waitFor(() => server.groupMembers("traders").length === 1);
+
+    server.stop(true);
+    await Bun.sleep(80);
+    server = createServer({ port });
+    await waitFor(() => server.groupMembers("traders").length === 1);
+    client.close();
+    server.stop(true);
+  });
+});

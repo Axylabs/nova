@@ -37,6 +37,9 @@ export function leaveGroup(state: ServerState, ws: ServerWebSocket<WsData>, grou
   if (!set) return;
   set.delete(ws);
   if (set.size === 0) state.groups.delete(group);
+  for (const member of set) {
+    if (member.data.id === ws.data.id) return; // a replacement session still owns it
+  }
   state.onGroupChange?.(group, ws, false);
 }
 
