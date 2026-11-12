@@ -85,7 +85,11 @@ jobs:
             tag: linux-arm64-musl
             zigbuild: "true"
           - target: x86_64-apple-darwin
-            os: macos-13
+            # macos-13 (Intel) runners are retired — the job queued forever with
+            # no runner. Cross-compile the x64 slice on the arm64 pool instead
+            # (same recipe as castrum's build-addons; the crate has no C sources,
+            # so only the linker arch matters, and ld64 handles it natively).
+            os: macos-latest
             tag: darwin-x64
           - target: aarch64-apple-darwin
             os: macos-latest
