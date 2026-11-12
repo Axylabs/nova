@@ -193,8 +193,12 @@ jobs:
       # — and that suite covers the native FFI path (int64 round-trips, pooled
       # decode, ...). Nothing has staged an addon at that point: `prepublish:
       # verify` merges ./artifacts into `prebuilds/` only AFTER verify inside
-      # prepublishOnly, and no cdylib is built in this job otherwise. Build the
-      # host one so the FFI tests can bind (the verify job does the same).
+      # prepublishOnly, and no cdylib is built in this job otherwise. Generate
+      # first (flatc's output is gitignored — the crate cannot compile without
+      # it), then build the host one so the FFI tests can bind (the verify job
+      # does the same).
+      - name: Generate the wire stack (the crate compiles against it)
+        run: bun run generate
       - name: Build the host cdylib (prepublishOnly's FFI tests need it)
         run: cargo build --release --manifest-path rust/Cargo.toml
       - name: Download all platform addons
