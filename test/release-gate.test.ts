@@ -97,14 +97,27 @@ describe("prepublish: artifact staging", () => {
     write(join(artifactsDir, "prebuilds/linux-x64-gnu/libignex_ffi.so"), "gnu");
     // Shape 2: per-artifact directory → artifacts/prebuild-<tag>/prebuilds/<tag>/<lib>
     write(join(artifactsDir, "prebuild-linux-x64-musl/prebuilds/linux-x64-musl/libignex_ffi.so"), "musl");
+    // Shape 3: upload-artifact v4 strips the `prebuilds/` root, so a
+    // merge-multiple download lands as artifacts/<tag>/<lib> (this is the
+    // shape the first v0.2.1 gate run choked on).
+    write(join(artifactsDir, "darwin-arm64/libignex_ffi.dylib"), "mac");
+    // Shape 4: no merge + v4 → artifacts/prebuild-<tag>/<tag>/<lib>
+    write(join(artifactsDir, "prebuild-win32-x64-msvc/win32-x64-msvc/ignex_ffi.dll"), "win");
 
     const staged = stageArtifacts(base, artifactsDir).sort();
     expect(staged).toEqual([
+      "prebuilds/darwin-arm64/libignex_ffi.dylib",
       "prebuilds/linux-x64-gnu/libignex_ffi.so",
       "prebuilds/linux-x64-musl/libignex_ffi.so",
+      "prebuilds/win32-x64-msvc/ignex_ffi.dll",
     ]);
 
-    const artifacts = expectedArtifacts(base, ["x86_64-unknown-linux-gnu", "x86_64-unknown-linux-musl"]);
+    const artifacts = expectedArtifacts(base, [
+      "x86_64-unknown-linux-gnu",
+      "x86_64-unknown-linux-musl",
+      "aarch64-apple-darwin",
+      "x86_64-pc-windows-msvc",
+    ]);
     expect(auditArtifacts(base, artifacts).missing).toEqual([]);
   });
 

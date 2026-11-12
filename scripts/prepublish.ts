@@ -24,8 +24,9 @@
  *   IGNEX_PUBLISH_ALLOW_PARTIAL=1 bun scripts/prepublish.ts
  */
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { join, relative } from "node:path";
+import { basename, join, relative } from "node:path";
 import {
+  NATIVE_TARGETS,
   libName,
   prebuildDir,
   prebuildLibPath,
@@ -82,34 +83,58 @@ export function expectedArtifacts(base: string, triples: readonly string[]): Exp
   });
 }
 
-/** Every directory named `prebuilds` found under `dir` (recursive). */
-function findPrebuildDirs(dir: string, found: string[] = []): string[] {
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+/** Directory names that hold staged libs for a target (`<tag>/<lib>`). */
+const KNOWN_TAG_DIRS = new Set(NATIVE_TARGETS.map((target) => target.tag));
+
+/**
+ * Tag dirs under `dir` (recursive). upload-artifact v4 strips the `prebuilds/`
+ * root from an upload of `path: prebuilds/`, so the release flow can produce
+ * four shapes after download — all handled here:
+ *   artifacts/prebuilds/<tag>/<lib>                 (merge-multiple, dir kept)
+ *   artifacts/<artifact-name>/prebuilds/<tag>/<lib> (no merge, dir kept)
+ *   artifacts/<tag>/<lib>                           (merge-multiple, v4 strip)
+ *   artifacts/<artifact-name>/<tag>/<lib>           (no merge, v4 strip)
+ * A dir named like a known tag that directly holds files is a hit; a dir named
+ * `prebuilds` contributes its children. (The v4-strip shapes are why the first
+ * v0.2.1 gate run failed: it only matched the first two.)
+ */
+function findTagDirs(dir: string, found: string[] = []): string[] {
+  const entries = readdirSync(dir, { withFileTypes: true });
+  if (KNOWN_TAG_DIRS.has(basename(dir)) && entries.some((entry) => entry.isFile())) {
+    found.push(dir);
+    return found;
+  }
+  for (const entry of entries) {
     if (!entry.isDirectory()) continue;
     const child = join(dir, entry.name);
-    if (entry.name === "prebuilds") found.push(child);
-    else findPrebuildDirs(child, found);
+    if (entry.name === "prebuilds") {
+      for (const tag of readdirSync(child, { withFileTypes: true })) {
+        if (!tag.isDirectory()) continue;
+        const tagDir = join(child, tag.name);
+        if (readdirSync(tagDir).length > 0) found.push(tagDir);
+      }
+      continue;
+    }
+    findTagDirs(child, found);
   }
   return found;
 }
 
 /**
- * Merge every `prebuilds/` directory under `artifacts/` into `<base>/prebuilds/`.
+ * Merge every staged tag dir under `artifacts/` into `<base>/prebuilds/<tag>/`.
  * Returns the package-relative paths copied (empty when there is nothing to
  * stage, e.g. a local publish from a checkout that already staged the host).
  */
 export function stageArtifacts(base: string = root, artifactsDir: string = ARTIFACTS_DIR): string[] {
   if (!existsSync(artifactsDir)) return [];
   const staged: string[] = [];
-  for (const source of findPrebuildDirs(artifactsDir)) {
-    for (const tag of readdirSync(source, { withFileTypes: true })) {
-      if (!tag.isDirectory()) continue;
-      for (const lib of readdirSync(join(source, tag.name))) {
-        mkdirSync(prebuildDir(base, tag.name), { recursive: true });
-        const destination = join(base, "prebuilds", tag.name, lib);
-        copyFileSync(join(source, tag.name, lib), destination);
-        staged.push(relative(base, destination).split("\\").join("/"));
-      }
+  for (const source of findTagDirs(artifactsDir)) {
+    const tag = basename(source);
+    for (const lib of readdirSync(source)) {
+      mkdirSync(prebuildDir(base, tag), { recursive: true });
+      const destination = join(base, "prebuilds", tag, lib);
+      copyFileSync(join(source, lib), destination);
+      staged.push(relative(base, destination).split("\\").join("/"));
     }
   }
   return staged;
