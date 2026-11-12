@@ -189,6 +189,14 @@ jobs:
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - name: Install dependencies
         run: bun install --frozen-lockfile
+      # `npm publish` triggers `prepublishOnly`, which re-runs `bun run verify`
+      # — and that suite covers the native FFI path (int64 round-trips, pooled
+      # decode, ...). Nothing has staged an addon at that point: `prepublish:
+      # verify` merges ./artifacts into `prebuilds/` only AFTER verify inside
+      # prepublishOnly, and no cdylib is built in this job otherwise. Build the
+      # host one so the FFI tests can bind (the verify job does the same).
+      - name: Build the host cdylib (prepublishOnly's FFI tests need it)
+        run: cargo build --release --manifest-path rust/Cargo.toml
       - name: Download all platform addons
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
@@ -250,8 +258,11 @@ jobs:
             exit 0
           fi
           echo "::warning::OIDC trusted publish failed — retrying with the NPM_TOKEN secret (needs an automation token to pass account 2FA; a publish token yields EOTP)"
-          # Attempt 2 — long-lived token fallback.
-          npm publish --access public --tag "$DIST_TAG" --provenance
+          # Attempt 2 — long-lived token fallback. Self-sufficient npmrc:
+          # setup-node never interpolated NODE_AUTH_TOKEN (it was not in the
+          # env at setup time), and npm does not read the env var directly.
+          printf 'registry=https://registry.npmjs.org/\n//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}\n' > "$RUNNER_TEMP/token.npmrc"
+          npm publish --access public --tag "$DIST_TAG" --provenance --userconfig "$RUNNER_TEMP/token.npmrc"
         env:
           DIST_TAG: ${{ github.event.inputs.dist_tag || 'latest' }}
           # Fallback credential for attempt 2. npm >= 12 prefers it over OIDC
