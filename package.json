@@ -19,11 +19,11 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/ignex-nova/ignex-nova.git"
+    "url": "git+https://github.com/Axylabs/nova.git"
   },
-  "homepage": "https://github.com/ignex-nova/ignex-nova#readme",
+  "homepage": "https://github.com/Axylabs/nova#readme",
   "bugs": {
-    "url": "https://github.com/ignex-nova/ignex-nova/issues"
+    "url": "https://github.com/Axylabs/nova/issues"
   },
   "sideEffects": false,
   "engines": {
