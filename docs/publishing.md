@@ -235,6 +235,9 @@ It runs from `prepublishOnly` **and** explicitly in the CI publish job, so both
 - [ ] the npm trusted publisher is bound to this repo + `publish.yml` (or an
       automation `NPM_TOKEN` secret exists as the fallback — a publish token
       yields EOTP; it must be an automation token)
+- [ ] `package.json` `repository.url` names the REAL repository — npm verifies
+      the sigstore provenance bundle against it and E422s on a mismatch
+      (`ignex-nova/ignex-nova` once failed a whole release this way)
 
 ## Tarball hygiene notes
 
