@@ -2,6 +2,7 @@
 name = "ignex-nova-ffi"
 version = "0.2.0"
 edition = "2021"
+license = "MIT"
 
 [lib]
 name = "ignex_ffi"

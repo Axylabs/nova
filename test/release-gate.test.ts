@@ -17,7 +17,7 @@ import {
   expectedArtifacts,
   stageArtifacts,
 } from "../scripts/prepublish";
-import { cargoInvocation } from "../scripts/build-prebuild";
+import { cargoInvocation, rustflagsEnv } from "../scripts/build-prebuild";
 import { targetFromTriple } from "../src/native/targets";
 import { cargoField, changelogProblems, targetProblems, undeclaredTargets } from "../scripts/check-version";
 
@@ -137,6 +137,14 @@ describe("build-prebuild: cargo invocation", () => {
     expect(args[0]).toBe("zigbuild");
     expect(args).not.toContain("cargo-zigbuild");
     expect(args).toContain("aarch64-unknown-linux-musl");
+  });
+
+  test("musl targets opt out of crt-static so rustc keeps the cdylib", () => {
+    // rustc defaults the musl targets to crt-static and DROPS the cdylib crate
+    // type for a crt-static target ("dropping unsupported crate type") — the
+    // build succeeds and no .so exists, which broke the CI musl jobs.
+    expect(rustflagsEnv(musl).RUSTFLAGS).toContain("-C target-feature=-crt-static");
+    expect(rustflagsEnv(gnu).RUSTFLAGS).toBeUndefined();
   });
 });
 

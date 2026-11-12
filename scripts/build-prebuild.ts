@@ -68,6 +68,21 @@ export function cargoInvocation(
   };
 }
 
+/** Extra RUSTFLAGS a target's build requires (pure — unit-tested).
+ *
+ * rustc defaults the `*-musl` targets to `crt-static`, and a crt-static target
+ * cannot host a `cdylib`: rustc silently DROPS the crate type with
+ * "dropping unsupported crate type `cdylib`", the build still "succeeds", and
+ * no `.so` exists for staging (this is what broke the CI musl jobs). Opting
+ * out is the standard musl-cdylib recipe — napi-rs ships its musl prebuilts
+ * the same way.
+ */
+export function rustflagsEnv(target: NativeTarget): Record<string, string> {
+  return target.triple.endsWith("-musl")
+    ? { RUSTFLAGS: "-C target-feature=-crt-static" }
+    : {};
+}
+
 function parseArgs(argv: string[]): Options {
   const value = (name: string): string | undefined => {
     const i = argv.indexOf(`--${name}`);
@@ -120,8 +135,14 @@ function buildOutputs(target: NativeTarget, profile: Options["profile"]): string
 
 function runCargo(target: NativeTarget, options: Options, useTargetFlag: boolean): void {
   const { command, args } = cargoInvocation(target, options, useTargetFlag);
+  const env = { ...process.env };
+  const { RUSTFLAGS } = rustflagsEnv(target);
+  if (RUSTFLAGS !== undefined) {
+    env.RUSTFLAGS = [process.env.RUSTFLAGS, RUSTFLAGS].filter(Boolean).join(" ");
+    console.log(`⚙  RUSTFLAGS=${env.RUSTFLAGS}`);
+  }
   console.log(`\n⚙  ${command} ${args.join(" ")}`);
-  const result = spawnSync(command, args, { cwd: root, stdio: "inherit" });
+  const result = spawnSync(command, args, { cwd: root, stdio: "inherit", env });
   if (result.error !== undefined) {
     die(
       `could not run \`${command} ${args[0]}\` (${result.error.message}).` +
