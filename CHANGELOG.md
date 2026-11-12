@@ -10,6 +10,8 @@ dated `## [<version>]` heading (see `scripts/release.ts` + `.release.json`).
 
 ## [Unreleased]
 
+## [0.2.1] — 2026-11-12
+
 ## [0.2.0] — 2026-11-11
 
 ### Added
